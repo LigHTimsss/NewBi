@@ -16,6 +16,8 @@ settings:
     # KSPlayer 依赖的 FFmpeg 二进制包（Libavcodec 等）在 Xcode 26 默认的显式模块扫描下找不到，关掉
     SWIFT_ENABLE_EXPLICIT_MODULES: NO
     _EXPERIMENTAL_SWIFT_EXPLICIT_MODULES: NO
+    # FFmpeg 二进制包没有 x86_64 模拟器切片；目标设备和 Apple 芯片的模拟器都是 arm64
+    "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
     STRIP_INSTALLED_PRODUCT: YES
   configs:
     Release:
