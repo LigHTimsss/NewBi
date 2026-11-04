@@ -1,10 +1,8 @@
 import SwiftUI
 
 enum Channel: String, CaseIterable, Identifiable {
-    case live = "直播", recommend = "推荐", hot = "热门", anime = "动画", movie = "影视"
+    case recommend = "推荐", hot = "热门"
     var id: Self { self }
-    /// MVP 只接推荐和热门
-    var isAvailable: Bool { self == .recommend || self == .hot }
 }
 
 @MainActor
@@ -46,9 +44,6 @@ final class FeedModel {
                 let feed = try await BiliClient.shared.get(.popular(page: page), as: PopularFeed.self)
                 reachedEnd = feed.noMore
                 next = feed.list
-            default:
-                next = []
-                reachedEnd = true
             }
             let known = reset ? [] : Set(items.map(\.id))
             let fresh = next.filter { !known.contains($0.id) }
@@ -61,7 +56,7 @@ final class FeedModel {
     }
 }
 
-/// 首页：顶部玻璃频道条 + 横向分页（直播/推荐/热门/动画/影视）
+/// 首页：顶部玻璃频道条 + 横向分页（推荐 / 热门）
 struct HomeView: View {
     var onAvatar: () -> Void
     @State private var channel: Channel = .recommend
@@ -103,14 +98,6 @@ private struct FeedPage: View {
     let model: FeedModel
 
     var body: some View {
-        if model.channel.isAvailable {
-            feed
-        } else {
-            ContentUnavailableView(model.channel.rawValue, systemImage: "hammer", description: Text("v1 实现"))
-        }
-    }
-
-    private var feed: some View {
         ScrollView {
             VStack(spacing: 12) {
                 if let first = model.items.first {
