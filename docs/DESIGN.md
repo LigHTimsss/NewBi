@@ -52,12 +52,13 @@
 - [x] 收藏：收藏夹网格、收藏夹详情（三种排序、失效视频、长按取消收藏）、详情页「收藏到…」多选
 - [x] 稍后再看：列表（进度、左滑删除、移除已看完、清空、开始播放）；首页 / 搜索 / 相关推荐 / 空间长按卡片添加，详情「更多」添加
 - [x] 离线缓存：后台下载、断点续传、地址过期自动换、本地播放（含弹幕）、灵动岛进度、断网可看
-- [ ] 控制中心 / 锁屏的播放信息（MPNowPlayingInfoCenter）
+- [x] 控制中心 / 锁屏的播放信息与远程控制（播放暂停、±10 秒、拖动、倍速、上一 P / 下一 P）
+- [x] 多 P：选集（横向胶囊 / 展开网格）、续播回到上次那一 P、播完自动连播、缓存当前 P
 
 ### v1
 - [x] DASH 高画质（1080P+ / 4K / HDR / 杜比视界，AV1 > HEVC > AVC），失败自动降级
 - [x] 动态流：关注 UP 主头像条、全部 / 视频、视频 / 图文 / 文字 / 转发 / 专栏卡片、点赞、评论面板、大图查看、底栏新动态红点
-- [ ] 投币
+- [x] 点赞（真实接口）、投币（1 / 2 枚、同时点赞）、长按点赞一键三连
 - [ ] 直播频道 + 实时弹幕（WebSocket）；动画 / 影视频道
 - [x] 迷你播放条：播放中返回自动缩小、点回原页不断播、横滑关闭（设计稿资料库页底部）
 - [ ] 端侧 AI：视频摘要、弹幕语义过滤
@@ -356,6 +357,26 @@ seg.so ──▶ 手写 Protobuf 解析（后台线程）──▶ 按时间排�
 - 缓存文件放在 Application Support/Downloads，不进 iCloud 备份
 - **暂未做**：多 P 视频批量缓存（目前只缓存当前分 P）、番剧
 
+**点赞 · 投币 · 三连**（视频页操作行）
+- 进页面时用 `archive/relation` 一次拿到「已赞 / 已投几枚 / 已收藏」，图标直接显示实心状态
+- 点赞乐观更新，失败回滚；计数显示为「详情统计 + 本页变化量」，不用重新拉详情
+- 投币面板：1 枚 / 2 枚两张玻璃卡片，选中的硬币沿 Y 轴翻转一圈；可勾选同时点赞；底部显示硬币余额；确认后硬币下落、成功触感，余额随即刷新。已投 1 枚时只能再投 1 枚，投满 2 枚后点按钮直接提示
+- 长按点赞 1.2 秒：点赞、投币、收藏三个图标外圈同时走一圈强调色光环，走满即一键三连；结果按项提示（如硬币不足时「已点赞，已收藏，硬币不足或已投满」）
+- 分享改为系统分享面板（视频链接）
+
+**多 P**
+- 简介里「选集 当前 / 总数」：默认横向胶囊，当前 P 带跳动的波形图标并自动滚到中间；「全部」展开成两列网格
+- 切 P 复用同一个播放器（只换流和弹幕），先上报上一 P 的进度；评论、简介不变
+- 续播：历史里记的是哪一 P 就直接打开哪一 P 并定位；从历史卡片进入（带 cid）同理
+- 播完自动播下一 P（设置可关）；锁屏 / 耳机的「下一首 / 上一首」切 P
+- 缓存按钮针对当前这一 P，缓存标题带「P2 xxx」
+
+**锁屏与控制中心**（`Features/Player/RemoteControl.swift`）
+- 显示标题（多 P 带分 P 名）、UP 主、封面（600 宽服务端缩放）、进度和倍速
+- 远程命令：播放 / 暂停、前进 / 后退 10 秒、拖动进度、切倍速、上一 / 下一 P
+- 只服务最近开始播放的播放器；只在播放状态、拖动、倍速、时长变化时写入，系统自己推算进度，不跟时钟刷新
+- 封面图回调在任意线程，`MPMediaItemArtwork` 在 nonisolated 函数里创建，避免 Swift 6 主线程隔离导致的崩溃
+
 **迷你播放条**（`Features/Player/MiniPlayer.swift`）
 - **何时出现**：在视频页播放中返回（点返回或侧滑）时，页面缩回、底部从下方弹出玻璃胶囊条继续播放；暂停状态下返回、或从视频页进入相关推荐 / UP 主空间则照旧暂停，不出小窗。设置里可关闭
 - **怎么判断是返回**：RootView 记录导航路径深度的变化，视频页消失时让出一拍再看最近一次是不是出栈（`onDisappear` 与路径 `onChange` 的先后不固定）
@@ -413,7 +434,7 @@ NewBi/
     └── Features/
         ├── Home/       HomeView.swift
         ├── Video/      VideoDetailView.swift
-        ├── Player/     PlayerController.swift · DanmakuEngine.swift · FullscreenPlayer.swift · PlayerDrawer.swift · DashHLS.swift · MiniPlayer.swift
+        ├── Player/     PlayerController.swift · DanmakuEngine.swift · FullscreenPlayer.swift · PlayerDrawer.swift · DashHLS.swift · MiniPlayer.swift · RemoteControl.swift
         │   └── Engine/ PlaybackEngine.swift · AVPlayerEngine.swift · FFmpegEngine.swift（KSPlayer）
         ├── Search/     SearchView.swift（含 SearchModel）
         ├── Dynamic/    DynamicView.swift（含 DynamicModel、红点 DynamicBadge）
