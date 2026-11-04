@@ -173,7 +173,7 @@ struct MiniPlayerBar: View {
         .background { Capsule().fill(.clear).glassEffect(.regular, in: .capsule) }
         .contentShape(.capsule)
         .offset(x: dragX)
-        .opacity(1 - min(abs(dragX) / 240, 0.6))
+        .opacity(1 - Double(min(abs(dragX) / CGFloat(240), CGFloat(0.6))))
         // 左右滑动关闭：与按钮并存，只认横向
         .simultaneousGesture(
             DragGesture(minimumDistance: 20)
