@@ -73,7 +73,8 @@ private struct MiniSlot: View {
                 .fill(Color.white.opacity(0.001))
                 .frame(height: 56)
                 .matchedTransitionSource(id: ZoomID.mini, in: namespace) { source in
-                    source.clipShape(.capsule)
+                    // 只支持 RoundedRectangle：半径取高度一半即胶囊
+                    source.clipShape(.rect(cornerRadius: 28))
                 }
                 .padding(.horizontal, 18)
                 .allowsHitTesting(false)
