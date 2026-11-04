@@ -13,8 +13,8 @@ on:
         options: [macos-26, macos-15, macos-15-intel]
 
 concurrency:
-  # 手动触发的单独一组，不和推送触发的互相取消
-  group: build-${{ github.ref }}-${{ github.event_name }}
+  # 手动触发按虚拟机分组，不和推送触发的、也不和别的虚拟机互相取消
+  group: build-${{ github.ref }}-${{ github.event_name }}-${{ inputs.runner }}
   cancel-in-progress: true
 
 jobs:
