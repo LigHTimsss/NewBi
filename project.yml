@@ -26,9 +26,10 @@ settings:
 packages:
   # FFmpeg 兜底引擎（约 +20MB）。开源版为 GPL-3.0，个人自用可以，分发前请看其 LICENSE。
   # 删掉这个包和下面的 dependencies 也能编译，只是没有 FFmpeg 兜底（代码用 canImport 隔离）
+  # 固定 2.3.4：最后一个开源（源码）版本。5.x 起改为闭源二进制，且不带 iOS 真机切片，装不到 iPhone 上
   KSPlayer:
     url: https://github.com/kingslay/KSPlayer
-    branch: main
+    exactVersion: 2.3.4
 # 共享 scheme：命令行 / CI 的 xcodebuild -scheme 需要
 schemes:
   NewBi:
@@ -42,9 +43,8 @@ targets:
     # Shared：与小组件扩展共用的实况活动定义
     sources: [NewBi, Shared]
     dependencies:
-      # main 分支的 KSPlayer 产品是不带依赖的二进制包，要用 KSPlayerUI 才会把 FFmpegKit 一起带进来
       - package: KSPlayer
-        product: KSPlayerUI
+        product: KSPlayer
       - target: NewBiWidgets
     settings:
       base:

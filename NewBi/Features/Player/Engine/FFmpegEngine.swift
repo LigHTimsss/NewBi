@@ -7,7 +7,7 @@ import UIKit
 /// - 和系统引擎吃同一个本地 HLS 地址（http://127.0.0.1/...），选流、代理、Referer 逻辑完全复用
 /// - 暂不支持系统画中画；AirPlay 仅音频
 ///
-/// 注：按 KSPlayer 2.x 的 API 编写，升级大版本时以其 MediaPlayerProtocol 为准调整。
+/// 注：固定 KSPlayer 2.3.4（最后的开源版）。5.x 起闭源且不含 iOS 真机切片，不要升级。
 @MainActor
 final class FFmpegEngine: NSObject, PlaybackEngine {
     let kind: EngineKind = .ffmpeg
@@ -43,10 +43,11 @@ final class FFmpegEngine: NSObject, PlaybackEngine {
         let player = KSMEPlayer(url: url, options: options)
         player.delegate = self
         player.contentMode = fill ? .scaleAspectFill : .scaleAspectFit
-        let video = player.view
-        video.frame = container.bounds
-        video.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        container.addSubview(video)
+        if let video = player.view {
+            video.frame = container.bounds
+            video.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            container.addSubview(video)
+        }
         self.player = player
         player.prepareToPlay()
     }
@@ -74,12 +75,12 @@ final class FFmpegEngine: NSObject, PlaybackEngine {
 
     func teardown() {
         player?.shutdown()
-        player?.view.removeFromSuperview()
+        player?.view?.removeFromSuperview()
         player = nil
     }
 }
 
-// 协议方法按 KSPlayer main 分支（二进制发布版）的 MediaPlayerDelegate 对齐，均为 @MainActor
+// KSPlayer 2.3.4 的 MediaPlayerDelegate（@MainActor）
 extension FFmpegEngine: MediaPlayerDelegate {
     func readyToPlay(player: some MediaPlayerProtocol) {
         onEvent?(.ready)
@@ -87,22 +88,13 @@ extension FFmpegEngine: MediaPlayerDelegate {
 
     func changeLoadState(player: some MediaPlayerProtocol) {}
 
-    func changeBuffering(player: some MediaPlayerProtocol, progress: UInt8) {}
-
-    /// 进度由 PlayerController 的 4 Hz 时钟读取，这里不用
-    func changePlaybackTime(player: some MediaPlayerProtocol, time: TimeInterval) {}
+    /// 缓冲进度 0–100；进度条由 PlayerController 的 4 Hz 时钟读取，这里不用
+    func changeBuffering(player: some MediaPlayerProtocol, progress: Int) {}
 
     func playBack(player: some MediaPlayerProtocol, loopCount: Int) {}
 
-    func reachEndOfStream(player: some MediaPlayerProtocol) {
-        onEvent?(.ended)
-    }
-
-    func playerDidClear(player: some MediaPlayerProtocol) {}
-
-    /// 正常播完已由 reachEndOfStream 上报，这里只报错误
     func finish(player: some MediaPlayerProtocol, error: Error?) {
-        if let error { onEvent?(.failed(error)) }
+        onEvent?(error == nil ? .ended : .failed(error))
     }
 }
 #endif
