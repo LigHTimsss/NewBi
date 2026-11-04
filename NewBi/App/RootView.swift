@@ -41,6 +41,8 @@ struct RootView: View {
                 }
             }
             .background(Theme.background)
+            // 重新打开被隐藏导航栏关掉的侧滑返回
+            .background { BackGestureEnabler().frame(width: 0, height: 0) }
             .overlay(alignment: .bottom) {
                 GlassTabBar(
                     selection: tab,

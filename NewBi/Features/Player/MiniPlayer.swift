@@ -9,28 +9,58 @@ final class NowPlaying {
 
     /// 缩小中的视频；nil 表示没有迷你条
     private(set) var minimized: VideoDetailModel?
-    /// 最近一次导航是不是出栈：视频页消失时据此区分「返回」（缩小）和「又打开了别的页」（暂停）
-    @ObservationIgnored private var lastWasPop = false
+    /// 最近一次出栈的时间
+    @ObservationIgnored private var lastPopAt: Date?
+    /// 刚消失、还没决定是缩小还是暂停的视频页
+    @ObservationIgnored private var pending: (model: VideoDetailModel, at: Date)?
+    /// 「出栈」和「视频页消失」相隔多久以内算同一次返回。两者在真机上的先后和间隔都不固定
+    /// （返回按钮、侧滑、转场时长都会影响），所以两边谁先到都记下时间，在这个窗口里配对
+    private static let pairWindow: TimeInterval = 0.8
 
     /// RootView 在导航路径深度变化时调用
     func pathChanged(from old: Int, to new: Int) {
-        lastWasPop = new < old
+        guard new < old else { return }
+        lastPopAt = .now
+        // 视频页先消失、路径后变：在这里补上缩小
+        if let pending, Date.now.timeIntervalSince(pending.at) < Self.pairWindow {
+            self.pending = nil
+            minimize(pending.model)
+        }
     }
 
-    /// 视频页消失时调用。onDisappear 与路径 onChange 的先后不固定，让出一拍再判断
+    /// 视频页消失时调用：配上了出栈就缩小，否则（进了相关推荐、UP 主空间等）稍等再暂停
     func detailDisappeared(_ model: VideoDetailModel) {
-        Task { @MainActor in
-            await Task.yield()
-            let enabled = UserDefaults.standard.object(forKey: "miniPlayer") as? Bool ?? true
-            guard lastWasPop, enabled, model.player.isPlaying else {
-                model.player.pause()
-                await model.reportProgress()
-                return
-            }
-            if let current = minimized, current !== model { close() }
-            model.player.isMinimized = true
-            withAnimation(Motion.component) { minimized = model }
+        if let lastPopAt, Date.now.timeIntervalSince(lastPopAt) < Self.pairWindow {
+            self.lastPopAt = nil
+            minimize(model)
+            return
         }
+        pending = (model, .now)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.pairWindow))
+            // 期间被配上（已缩小）或页面又回来了（pending 被清掉）就什么都不做
+            guard let pending, pending.model === model else { return }
+            self.pending = nil
+            model.player.pause()
+            await model.reportProgress()
+        }
+    }
+
+    /// 视频页又出现了（从上层页面返回）：取消待定的暂停
+    func detailAppeared(_ model: VideoDetailModel) {
+        if pending?.model === model { pending = nil }
+    }
+
+    private func minimize(_ model: VideoDetailModel) {
+        let enabled = UserDefaults.standard.object(forKey: "miniPlayer") as? Bool ?? true
+        guard enabled, model.player.isPlaying else {
+            model.player.pause()
+            Task { await model.reportProgress() }
+            return
+        }
+        if let current = minimized, current !== model { close() }
+        model.player.isMinimized = true
+        withAnimation(Motion.component) { minimized = model }
     }
 
     /// 进入后台：上报进度；关闭了后台播放时暂停（画中画中除外）
@@ -74,8 +104,9 @@ struct MiniPlayerBar: View {
         HStack(spacing: 10) {
             Button(action: onOpen) {
                 HStack(spacing: 10) {
-                    // 直接显示正在播放的画面（同一个播放器图层，不额外解码）
-                    PlayerSurface(controller: player, showsDanmaku: false)
+                    // 直接显示正在播放的画面（同一个播放器图层，不额外解码）；
+                    // 这是 UIKit 视图，必须关掉它的触摸，否则会吞掉「回到视频」按钮的点击
+                    PlayerSurface(controller: player, showsDanmaku: false, interactive: false)
                         .frame(width: 64, height: 36)
                         .clipShape(.rect(cornerRadius: 8))
                         .allowsHitTesting(false)
@@ -97,6 +128,7 @@ struct MiniPlayerBar: View {
                     .font(.system(size: 18))
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 40, height: 44)
+                    .contentShape(.rect)
             }
             .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
 
@@ -104,6 +136,7 @@ struct MiniPlayerBar: View {
                 Image(systemName: "goforward.10")
                     .font(.system(size: 18))
                     .frame(width: 40, height: 44)
+                    .contentShape(.rect)
             }
             .accessibilityLabel("前进 10 秒")
 
@@ -112,6 +145,7 @@ struct MiniPlayerBar: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.secondaryText)
                     .frame(width: 30, height: 44)
+                    .contentShape(.rect)
             }
             .accessibilityLabel("关闭小窗")
         }
@@ -121,18 +155,20 @@ struct MiniPlayerBar: View {
         .padding(.trailing, 6)
         .frame(height: 56)
         .overlay(alignment: .bottom) { MiniProgress(player: player, color: accent) }
-        .glassEffect(.regular.interactive(), in: .capsule)
+        // 玻璃画在背景里、不做 interactive：整条上的 interactive 玻璃会和里面的按钮抢触摸
+        .background { Capsule().fill(.clear).glassEffect(.regular, in: .capsule) }
+        .contentShape(.capsule)
         .offset(x: dragX)
         .opacity(1 - min(abs(dragX) / 240, 0.6))
-        // 左右滑动关闭
-        .gesture(
-            DragGesture(minimumDistance: 16)
+        // 左右滑动关闭：与按钮并存，只认横向
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
                 .onChanged { value in
-                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                    guard abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
                     dragX = value.translation.width
                 }
                 .onEnded { value in
-                    if abs(value.translation.width) > 120 {
+                    if abs(dragX) > 120 {
                         NowPlaying.shared.close()
                     }
                     withAnimation(Motion.component) { dragX = 0 }

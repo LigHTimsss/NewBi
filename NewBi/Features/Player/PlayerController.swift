@@ -427,9 +427,12 @@ struct PlayerSurface: UIViewRepresentable {
     let controller: PlayerController
     /// 迷你播放条里只要画面，不挂弹幕图层（否则弹幕会按小尺寸重新布局）
     var showsDanmaku = true
+    /// 放在按钮里时设为 false：UIKit 视图默认接收触摸，会挡住外层按钮
+    var interactive = true
 
     func makeUIView(context: Context) -> PlayerHostView {
         let view = PlayerHostView()
+        view.isUserInteractionEnabled = interactive
         if showsDanmaku { view.attach(controller.danmaku) }
         return view
     }

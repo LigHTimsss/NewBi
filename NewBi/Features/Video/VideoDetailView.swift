@@ -238,13 +238,19 @@ struct VideoDetailView: View {
             configureQueue(created)
             await created.load()
         }
-        .onAppear { UIDevice.current.beginGeneratingDeviceOrientationNotifications() }
+        .onAppear {
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            // 从上层页面（UP 主空间、相关推荐）返回：取消待定的暂停
+            if let model { NowPlaying.shared.detailAppeared(model) }
+            BackGesture.shared.isBlocked = isFullscreen
+        }
         // 返回时若正在播放就缩成迷你播放条；进入相关推荐等其它页面时暂停。
         // 都不是时模型随页面释放，PlayerController 在 deinit 中清理
         .onDisappear {
             if let model { NowPlaying.shared.detailDisappeared(model) }
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
             if isFullscreen { Orientation.lock(.portrait) }
+            BackGesture.shared.isBlocked = false
         }
         .toast(Binding(get: { model?.resumeHint }, set: { model?.resumeHint = $0 }), bottomPadding: 40)
         // 评论里的时间点：跳到该位置并继续播放；其它链接交回上层
@@ -317,6 +323,8 @@ struct VideoDetailView: View {
     private func setFullscreen(_ on: Bool, preferred: UIInterfaceOrientationMask = .landscapeRight) {
         if !on { locked = false }
         isFullscreen = on
+        // 全屏里左右滑是拖进度，关掉侧滑返回
+        BackGesture.shared.isBlocked = on
         if on {
             Orientation.lock(.landscape, preferred: preferred)
         } else {
