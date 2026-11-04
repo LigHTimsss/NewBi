@@ -42,8 +42,9 @@ targets:
     # Shared：与小组件扩展共用的实况活动定义
     sources: [NewBi, Shared]
     dependencies:
+      # main 分支的 KSPlayer 产品是不带依赖的二进制包，要用 KSPlayerUI 才会把 FFmpegKit 一起带进来
       - package: KSPlayer
-        product: KSPlayer
+        product: KSPlayerUI
       - target: NewBiWidgets
     settings:
       base:
