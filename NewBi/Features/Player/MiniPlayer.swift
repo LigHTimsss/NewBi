@@ -9,30 +9,37 @@ final class NowPlaying {
 
     /// 缩小中的视频；nil 表示没有迷你条
     private(set) var minimized: VideoDetailModel?
-    /// 最近一次出栈的时间
-    @ObservationIgnored private var lastPopAt: Date?
+    /// 最近一次导航路径变化：是出栈（返回）还是入栈（进了别的页面），以及时间
+    @ObservationIgnored private var lastPathChange: (popped: Bool, at: Date)?
     /// 刚消失、还没决定是缩小还是暂停的视频页
     @ObservationIgnored private var pending: (model: VideoDetailModel, at: Date)?
-    /// 「出栈」和「视频页消失」相隔多久以内算同一次返回。两者在真机上的先后和间隔都不固定
-    /// （返回按钮、侧滑、转场时长都会影响），所以两边谁先到都记下时间，在这个窗口里配对
-    private static let pairWindow: TimeInterval = 0.8
+    /// 「路径变化」和「视频页消失」相隔多久以内算同一次。两者在真机上的先后和间隔都不固定：
+    /// 路径在转场开始时就变，视频页要等转场动画走完才消失，缩放转场（收回卡片 / 收进胶囊）
+    /// 比普通推入推出长不少，0.8 秒会配不上、被当成「进了别的页面」而暂停。所以两边谁先到都记下，在这个窗口里配对
+    private static let pairWindow: TimeInterval = 1.5
 
     /// RootView 在导航路径深度变化时调用
     func pathChanged(from old: Int, to new: Int) {
-        guard new < old else { return }
-        lastPopAt = .now
-        // 视频页先消失、路径后变：在这里补上缩小
-        if let pending, Date.now.timeIntervalSince(pending.at) < Self.pairWindow {
+        guard new != old else { return }
+        lastPathChange = (new < old, .now)
+        // 视频页先消失、路径后变（侧滑返回时可能这样）：在这里补上缩小
+        if new < old, let pending, Date.now.timeIntervalSince(pending.at) < Self.pairWindow {
             self.pending = nil
             minimize(pending.model)
         }
     }
 
-    /// 视频页消失时调用：配上了出栈就缩小，否则（进了相关推荐、UP 主空间等）稍等再暂停
+    /// 视频页消失时调用：刚出栈就缩小；刚入栈（进了相关推荐、UP 主空间等）就暂停；
+    /// 都没有（路径还没变，或连播换了视频）先记下，等出栈来配，配不上再暂停
     func detailDisappeared(_ model: VideoDetailModel) {
-        if let lastPopAt, Date.now.timeIntervalSince(lastPopAt) < Self.pairWindow {
-            self.lastPopAt = nil
-            minimize(model)
+        if let change = lastPathChange, Date.now.timeIntervalSince(change.at) < Self.pairWindow {
+            lastPathChange = nil
+            if change.popped {
+                minimize(model)
+            } else {
+                model.player.pause()
+                Task { await model.reportProgress() }
+            }
             return
         }
         pending = (model, .now)

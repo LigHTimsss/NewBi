@@ -47,8 +47,6 @@ struct VideoDestination: View {
         }, onCollapseTarget: { collapsesToMini = $0 })
         .id(card.bvid)
         .transition(.opacity.combined(with: .scale(scale: 0.98)))
-        // 在这一页上再点开别的视频、返回时也能收进胶囊
-        .miniSlot(bottom: 8)
         .zoomDestination(id: collapsesToMini ? ZoomID.mini : ZoomID.card(card))
     }
 }

@@ -3,7 +3,8 @@ import SwiftUI
 /// 视频卡片 ⇄ 视频页 ⇄ 迷你播放胶囊 的连贯缩放转场。
 ///
 /// - 列表里的视频卡片用 `.zoomSource(card)` 标成转场源：点进去时卡片展开铺满屏幕，返回时收回卡片。
-/// - 每个页面底部、迷你播放条的位置放一个透明的 `MiniSlot`（同一个转场源 id `ZoomID.mini`）：
+/// - RootView 在迷你播放条的位置放唯一一个透明的 `MiniSlot`（转场源 id `ZoomID.mini`，只能有一个，
+///   否则会配到视频页自己身上）：
 ///   返回时若视频还在播放，视频页收缩进这个胶囊位，随后真正的迷你条在原地出现；
 ///   点迷你条回到视频页时，也是从这个胶囊位展开。
 /// - 视频页用 `.zoomDestination(id:)`，id 随播放状态切换（播放中 → 胶囊，其它 → 卡片）。
@@ -26,11 +27,6 @@ extension View {
     /// 视频页：从 id 对应的源展开，返回时收回到（届时的）id 对应的源
     func zoomDestination(id: String) -> some View {
         modifier(ZoomDestination(id: id))
-    }
-
-    /// 在页面底部迷你播放条的位置放一个透明胶囊位
-    func miniSlot(bottom: CGFloat) -> some View {
-        overlay(alignment: .bottom) { MiniSlot().padding(.bottom, bottom) }
     }
 }
 
@@ -64,7 +60,7 @@ private struct ZoomDestination: ViewModifier {
 }
 
 /// 迷你播放条的「影子」：和 MiniPlayerBar 同样大小、同样位置，不可见、不接触摸
-private struct MiniSlot: View {
+struct MiniSlot: View {
     @Environment(\.zoomNamespace) private var namespace
 
     var body: some View {
