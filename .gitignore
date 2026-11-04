@@ -1,0 +1,11 @@
+# XcodeGen 生成的工程不入库，CI 和本地都用 project.yml 生成
+*.xcodeproj/
+*.xcworkspace/
+build/
+DerivedData/
+.swiftpm/
+*.ipa
+*.log
+.DS_Store
+xcuserdata/
+.claude/

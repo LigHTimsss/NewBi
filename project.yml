@@ -1,0 +1,79 @@
+# XcodeGen 配置：在 Mac 上执行 `xcodegen generate` 生成 NewBi.xcodeproj
+name: NewBi
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # 体积 / 性能：去除未用代码，Release 全模块优化
+    DEAD_CODE_STRIPPING: YES
+    STRIP_INSTALLED_PRODUCT: YES
+  configs:
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+packages:
+  # FFmpeg 兜底引擎（约 +20MB）。开源版为 GPL-3.0，个人自用可以，分发前请看其 LICENSE。
+  # 删掉这个包和下面的 dependencies 也能编译，只是没有 FFmpeg 兜底（代码用 canImport 隔离）
+  KSPlayer:
+    url: https://github.com/kingslay/KSPlayer
+    branch: main
+# 共享 scheme：命令行 / CI 的 xcodebuild -scheme 需要
+schemes:
+  NewBi:
+    build:
+      targets:
+        NewBi: all
+targets:
+  NewBi:
+    type: application
+    platform: iOS
+    # Shared：与小组件扩展共用的实况活动定义
+    sources: [NewBi, Shared]
+    dependencies:
+      - package: KSPlayer
+        product: KSPlayer
+      - target: NewBiWidgets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.newbi
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: NewBi/Info.plist
+      properties:
+        CFBundleDisplayName: NewBi
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        # DASH 转 HLS 的本地代理跑在 127.0.0.1，需要放行本地明文 HTTP
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # 离线缓存进度显示在灵动岛 / 锁屏
+        NSSupportsLiveActivities: true
+
+  # 小组件扩展：目前只有离线缓存的实况活动
+  NewBiWidgets:
+    type: app-extension
+    platform: iOS
+    sources: [NewBiWidgets, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.newbi.widgets
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: NewBiWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: NewBi
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

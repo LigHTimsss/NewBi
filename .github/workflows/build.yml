@@ -1,0 +1,76 @@
+# 在 GitHub 的 macOS 虚拟机上编译：模拟器版用来查编译错误，另外打一个未签名的 ipa（可自签安装）
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 选择最新的 Xcode 26
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          echo "使用 $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: 生成工程
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: 缓存 Swift 包
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+          key: spm-${{ hashFiles('project.yml') }}
+
+      - name: 编译（模拟器）
+        run: |
+          status=0
+          xcodebuild build \
+            -project NewBi.xcodeproj -scheme NewBi -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO > build-simulator.log 2>&1 || status=$?
+          # 只把错误和并发警告打到控制台，完整日志在产物里
+          grep -E "error:|warning: .*(Sendable|isolat)|BUILD (SUCCEEDED|FAILED)" build-simulator.log | sort -u || true
+          exit $status
+
+      - name: 打未签名 ipa（真机）
+        run: |
+          status=0
+          xcodebuild build \
+            -project NewBi.xcodeproj -scheme NewBi -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" > build-device.log 2>&1 || status=$?
+          grep -E "error:|BUILD (SUCCEEDED|FAILED)" build-device.log | sort -u || true
+          [ $status -eq 0 ] || exit $status
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/NewBi.app Payload/
+          zip -qry NewBi-unsigned.ipa Payload
+
+      - name: 上传 ipa
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NewBi-unsigned-ipa
+          path: NewBi-unsigned.ipa
+          retention-days: 7
+
+      - name: 上传编译日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build-*.log
+          if-no-files-found: ignore
