@@ -43,11 +43,10 @@ final class FFmpegEngine: NSObject, PlaybackEngine {
         let player = KSMEPlayer(url: url, options: options)
         player.delegate = self
         player.contentMode = fill ? .scaleAspectFill : .scaleAspectFit
-        if let video = player.view {
-            video.frame = container.bounds
-            video.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            container.addSubview(video)
-        }
+        let video = player.view
+        video.frame = container.bounds
+        video.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.addSubview(video)
         self.player = player
         player.prepareToPlay()
     }
@@ -75,7 +74,7 @@ final class FFmpegEngine: NSObject, PlaybackEngine {
 
     func teardown() {
         player?.shutdown()
-        player?.view?.removeFromSuperview()
+        player?.view.removeFromSuperview()
         player = nil
     }
 }
