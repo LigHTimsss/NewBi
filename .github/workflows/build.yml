@@ -5,14 +5,21 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 虚拟机（macos-26 排不上队时换一个）
+        type: choice
+        default: macos-26
+        options: [macos-26, macos-15, macos-15-intel]
 
 concurrency:
-  group: build-${{ github.ref }}
+  # 手动触发的单独一组，不和推送触发的互相取消
+  group: build-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: ${{ inputs.runner || 'macos-26' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
