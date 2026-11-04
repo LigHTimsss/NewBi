@@ -56,6 +56,14 @@ final class PlayerController {
     var isMinimized = false {
         didSet { if isMinimized { danmaku.clear() } }
     }
+
+    /// 多 P：由详情模型设置；锁屏「上一首 / 下一首」和播完连播都走 onRequestPart
+    var hasNextPart = false
+    var hasPreviousPart = false
+    @ObservationIgnored var onRequestPart: ((Int) -> Void)?
+
+    /// 实际播放速度（含长按临时倍速）
+    var effectiveRate: Float { isBoosting ? boostRate : rate }
     var danmakuSettings: DanmakuSettings {
         didSet {
             guard danmakuSettings != oldValue else { return }
@@ -125,6 +133,17 @@ final class PlayerController {
         clock?.cancel()
         sleepTask?.cancel()
         engine.teardown()
+        RemoteControl.shared.deactivate(ObjectIdentifier(self))
+    }
+
+    /// 锁屏 / 控制中心显示的标题、UP 主、封面
+    func setNowPlaying(title: String, artist: String, cover: String) {
+        RemoteControl.shared.activate(self, metadata: .init(title: title, artist: artist, cover: cover))
+    }
+
+    func requestPart(offset: Int) {
+        guard offset > 0 ? hasNextPart : hasPreviousPart else { return }
+        onRequestPart?(offset)
     }
 
     // MARK: 加载
@@ -254,10 +273,14 @@ final class PlayerController {
             itemWasReady = true
             let seconds = engine.duration
             if seconds > 0 { duration = seconds }
+            RemoteControl.shared.refresh(self)
         case .failed:
             recover()
         case .ended:
-            break
+            // 多 P 连播（设置里可关）
+            if hasNextPart, UserDefaults.standard.object(forKey: "autoNextPart") as? Bool ?? true {
+                onRequestPart?(1)
+            }
         }
     }
 
@@ -299,6 +322,10 @@ final class PlayerController {
         isPlaying ? engine.pause() : engine.play()
     }
 
+    func play() {
+        engine.play()
+    }
+
     func pause() {
         engine.pause()
     }
@@ -312,12 +339,14 @@ final class PlayerController {
         let target = min(max(seconds, 0), duration)
         currentTime = target
         engine.seek(to: target)
+        RemoteControl.shared.refresh(self)
     }
 
     func setRate(_ value: Float) {
         rate = value
         engine.setRate(value)
         if isPlaying { danmaku.resume(rate: value) }
+        RemoteControl.shared.refresh(self)
     }
 
     /// 长按画面临时倍速（弹幕一起加速）
@@ -374,6 +403,7 @@ final class PlayerController {
             isPlaying = playing
             if !playing { isBoosting = false }
             playing ? danmaku.resume(rate: isBoosting ? boostRate : rate) : danmaku.pause()
+            RemoteControl.shared.refresh(self)
         }
         if playing, danmakuEnabled, !isMinimized { danmaku.tick(at: seconds) }
     }

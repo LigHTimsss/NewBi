@@ -133,6 +133,20 @@ extension Endpoint {
         Endpoint(path: "/x/dynamic/feed/dyn/thumb", query: ["csrf": csrf])
     }
 
+    // MARK: 点赞 / 投币（需登录）
+
+    /// 我和这个视频的关系：是否已赞、已投几枚币、是否已收藏
+    static func archiveRelation(aid: Int) -> Endpoint {
+        Endpoint(path: "/x/web-interface/archive/relation", query: ["aid": "\(aid)"])
+    }
+
+    /// 点赞 / 取消点赞（POST，aid、like=1 赞 / 2 取消）
+    static let archiveLike = Endpoint(path: "/x/web-interface/archive/like")
+    /// 投币（POST，aid、multiply=1/2、select_like=0/1 同时点赞）
+    static let coinAdd = Endpoint(path: "/x/web-interface/coin/add")
+    /// 一键三连：点赞 + 投 2 币 + 收藏到默认收藏夹（POST，aid）
+    static let archiveTriple = Endpoint(path: "/x/web-interface/archive/like/triple")
+
     // MARK: 稍后再看（需登录）
 
     static let watchLater = Endpoint(path: "/x/v2/history/toview")

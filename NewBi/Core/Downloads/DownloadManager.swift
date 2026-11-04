@@ -52,10 +52,15 @@ final class DownloadManager {
 
     // MARK: 添加
 
-    func enqueue(detail: VideoDetail, quality qn: Int) async throws {
-        let id = DownloadRecord.id(bvid: detail.bvid, cid: detail.cid)
+    /// - Parameter part: 多 P 视频时缓存的那一 P（nil 为第一 P）
+    func enqueue(detail: VideoDetail, part: VideoPage? = nil, quality qn: Int) async throws {
+        let cid = part?.cid ?? detail.cid
+        let multiPart = (detail.pages?.count ?? 0) > 1
+        let title = multiPart ? "\(detail.title) · P\(part?.page ?? 1) \(part?.part ?? "")" : detail.title
+        let duration = part?.duration ?? detail.duration
+        let id = DownloadRecord.id(bvid: detail.bvid, cid: cid)
         guard !records.contains(where: { $0.id == id }) else { return }
-        let info = try await BiliClient.shared.get(.playURL(bvid: detail.bvid, cid: detail.cid, qn: qn, dash: true), as: PlayURLInfo.self)
+        let info = try await BiliClient.shared.get(.playURL(bvid: detail.bvid, cid: cid, qn: qn, dash: true), as: PlayURLInfo.self)
         let preference = UserDefaults.standard.string(forKey: "codecPreference") ?? "auto"
         guard let dash = info.dash,
               let selection = DashSelector.select(dash, quality: qn, codecOrder: DashSelector.codecOrder(preference: preference)) else {
@@ -63,8 +68,8 @@ final class DownloadManager {
         }
         let name = zip(info.acceptQuality, info.acceptDescription).first { $0.0 == selection.quality }?.1 ?? "\(selection.quality)"
         let record = DownloadRecord(
-            id: id, aid: detail.aid, bvid: detail.bvid, cid: detail.cid, title: detail.title, cover: detail.pic,
-            ownerName: detail.owner.name, ownerMid: detail.owner.mid, duration: detail.duration,
+            id: id, aid: detail.aid, bvid: detail.bvid, cid: cid, title: title, cover: detail.pic,
+            ownerName: detail.owner.name, ownerMid: detail.owner.mid, duration: duration,
             quality: selection.quality, qualityName: name, video: selection.video, audio: selection.audio,
             state: .waiting, createdAt: .now
         )
@@ -74,7 +79,7 @@ final class DownloadManager {
         schedule()
         // 封面、弹幕都很小，前台顺手下完，断网时也能显示
         Task.detached(priority: .utility) {
-            await Self.downloadExtras(id: id, cover: detail.pic, cid: detail.cid, duration: detail.duration)
+            await Self.downloadExtras(id: id, cover: detail.pic, cid: cid, duration: duration)
         }
     }
 

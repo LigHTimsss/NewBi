@@ -91,6 +91,22 @@ struct VideoDetail: Decodable, Sendable {
     let pages: [VideoPage]?
 }
 
+/// 我和视频的关系（archive/relation）
+struct ArchiveRelation: Decodable, Sendable {
+    let like: Bool
+    /// 已投硬币数（0–2）
+    let coin: Int
+    let favorite: Bool
+}
+
+/// 一键三连的结果：各项是否成功
+struct TripleResult: Decodable, Sendable {
+    let like: Bool
+    let coin: Bool
+    let fav: Bool
+    let multiply: Int?
+}
+
 /// fnval=4048 时返回 dash；fnval=1 时返回 durl（MP4，兜底）
 struct PlayURLInfo: Decodable, Sendable {
     struct Segment: Decodable, Sendable {

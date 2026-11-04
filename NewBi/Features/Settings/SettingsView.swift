@@ -13,6 +13,8 @@ struct SettingsView: View {
     @AppStorage("backgroundPlay") private var backgroundPlay = true
     /// 播放中返回时缩成迷你播放条继续播
     @AppStorage("miniPlayer") private var miniPlayer = true
+    /// 多 P 视频播完自动播下一 P
+    @AppStorage("autoNextPart") private var autoNextPart = true
     /// 离线缓存默认只走 Wi-Fi，省流量
     @AppStorage("downloadWifiOnly") private var downloadWifiOnly = true
     /// 超出账号权限时服务器自动降到可用的最高档
@@ -86,6 +88,8 @@ struct SettingsView: View {
                     Toggle("后台播放", isOn: $backgroundPlay).frame(minHeight: 50)
                     divider
                     Toggle("返回时小窗继续播放", isOn: $miniPlayer).frame(minHeight: 50)
+                    divider
+                    Toggle("多 P 自动连播", isOn: $autoNextPart).frame(minHeight: 50)
                     divider
                     Toggle("移动网络播放提醒", isOn: $cellularAlert).frame(minHeight: 50)
                     divider

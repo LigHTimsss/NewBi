@@ -226,6 +226,8 @@ private struct DownloadingRow: View {
 /// 视频页「缓存」：选画质后加入离线缓存
 struct CacheSheet: View {
     let detail: VideoDetail
+    /// 多 P 时缓存当前这一 P
+    let part: VideoPage?
     let qualities: [QualityOption]
     @State private var selected: Int
     @State private var isAdding = false
@@ -233,8 +235,9 @@ struct CacheSheet: View {
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
-    init(detail: VideoDetail, qualities: [QualityOption], current: Int) {
+    init(detail: VideoDetail, part: VideoPage? = nil, qualities: [QualityOption], current: Int) {
         self.detail = detail
+        self.part = part
         self.qualities = qualities.filter(\.available)
         _selected = State(initialValue: current)
     }
@@ -261,7 +264,11 @@ struct CacheSheet: View {
                         .accessibilityAddTraits(on ? .isSelected : [])
                     }
                 } header: {
-                    Text("缓存画质")
+                    if let part, (detail.pages?.count ?? 0) > 1 {
+                        Text("缓存 P\(part.page) \(part.part) · 画质")
+                    } else {
+                        Text("缓存画质")
+                    }
                 } footer: {
                     Text("缓存会在后台继续，可在「我的 → 离线缓存」查看进度。弹幕一并缓存，断网也能看。")
                 }
@@ -284,7 +291,7 @@ struct CacheSheet: View {
         isAdding = true
         Task {
             do {
-                try await DownloadManager.shared.enqueue(detail: detail, quality: selected)
+                try await DownloadManager.shared.enqueue(detail: detail, part: part, quality: selected)
                 ToastCenter.shared.show("已加入离线缓存")
                 dismiss()
             } catch {
