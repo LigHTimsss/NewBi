@@ -29,7 +29,7 @@ struct ImageViewer: View {
     var body: some View {
         ZStack {
             Color.black
-                .opacity(1 - min(abs(dragOffset) / 400, 0.6))
+                .opacity(1 - Double(min(abs(dragOffset) / CGFloat(400), CGFloat(0.6))))
                 .ignoresSafeArea()
 
             TabView(selection: $index) {
