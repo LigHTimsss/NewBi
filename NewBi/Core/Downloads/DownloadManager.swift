@@ -265,7 +265,7 @@ final class DownloadManager {
             guard let activity else { return }
             self.activity = nil
             let state = DownloadActivityAttributes.ContentState(title: "缓存完成", progress: 1, remaining: 0, finished: true)
-            Task { await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(.now.addingTimeInterval(4))) }
+            Self.endActivity(id: activity.id, state: state)
             return
         }
         // 进度最多每秒刷新一次，省电
@@ -280,9 +280,26 @@ final class DownloadManager {
             finished: false
         )
         if let activity {
-            Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
+            Self.updateActivity(id: activity.id, state: state)
         } else {
             activity = try? Activity.request(attributes: DownloadActivityAttributes(), content: ActivityContent(state: state, staleDate: nil))
+        }
+    }
+
+    // Activity 不是 Sendable：只把 id 和状态交给后台任务，在那边按 id 找回实例再更新 / 结束
+    private nonisolated static func updateActivity(id: String, state: DownloadActivityAttributes.ContentState) {
+        Task.detached {
+            for activity in Activity<DownloadActivityAttributes>.activities where activity.id == id {
+                await activity.update(ActivityContent(state: state, staleDate: nil))
+            }
+        }
+    }
+
+    private nonisolated static func endActivity(id: String, state: DownloadActivityAttributes.ContentState) {
+        Task.detached {
+            for activity in Activity<DownloadActivityAttributes>.activities where activity.id == id {
+                await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(.now.addingTimeInterval(4)))
+            }
         }
     }
 
