@@ -1,0 +1,35 @@
+# Codemagic 云端编译（GitHub 的 macOS 虚拟机排不上队时用）：打一个未签名的 ipa，自签后装真机
+# 只手动触发（不写 triggering），省免费额度；步骤与 .github/workflows/build.yml 一致
+workflows:
+  unsigned-ipa:
+    name: 未签名 ipa
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+    cache:
+      cache_paths:
+        - $CM_BUILD_DIR/build/SourcePackages
+    scripts:
+      - name: Xcode 版本
+        script: xcodebuild -version
+      - name: 生成工程
+        script: |
+          brew install xcodegen
+          xcodegen generate
+      - name: 打未签名 ipa（真机）
+        script: |
+          status=0
+          xcodebuild build \
+            -project NewBi.xcodeproj -scheme NewBi -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" > build-device.log 2>&1 || status=$?
+          # 只把错误打到控制台，完整日志在产物里
+          grep -E "error:|BUILD (SUCCEEDED|FAILED)" build-device.log | sort -u || true
+          [ $status -eq 0 ] || exit $status
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/NewBi.app Payload/
+          zip -qry NewBi-unsigned.ipa Payload
+    artifacts:
+      - NewBi-unsigned.ipa
+      - build-*.log
