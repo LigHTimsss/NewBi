@@ -37,6 +37,12 @@ enum Motion {
     /// 入场：blur 8 → 0、y 14 → 0，间隔 50ms
     static let entrance = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.56)
     static let stagger = 0.05
+    /// 视频页从卡片封面展开
+    static let stageOpen = Animation.spring(response: 0.46, dampingFraction: 0.88)
+    /// 从迷你胶囊展开（距离更长，稍慢一点）
+    static let stageExpand = Animation.spring(response: 0.5, dampingFraction: 0.87)
+    /// 收进胶囊 / 收回卡片
+    static let stageClose = Animation.spring(response: 0.42, dampingFraction: 0.9)
 }
 
 extension EnvironmentValues {

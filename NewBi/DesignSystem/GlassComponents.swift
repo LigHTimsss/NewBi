@@ -477,8 +477,8 @@ private struct RiseIn: ViewModifier {
     func body(content: Content) -> some View {
         content
             .opacity(shown ? 1 : 0)
+            // 只用透明度 + 位移（不用模糊：每张卡片一次离屏模糊，首屏 8 张同时做会掉帧）
             .offset(y: shown || reduceMotion ? 0 : 14)
-            .blur(radius: shown || reduceMotion ? 0 : 8)
             .onAppear {
                 guard !shown else { return }
                 withAnimation(Motion.entrance.delay(delay)) { shown = true }

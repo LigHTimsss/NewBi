@@ -185,9 +185,7 @@ private struct HistoryRow: View {
     @Environment(\.accent) private var accent
 
     var body: some View {
-        // List 里的 NavigationLink 会带箭头，这里用透明链接 + 自定义行
-        ZStack {
-            NavigationLink(value: item.card) { EmptyView() }.opacity(0)
+        VideoLink(card: item.card) {
             HStack(spacing: 12) {
                 RemoteImage(url: item.cover, size: CGSize(width: 150, height: 84))
                     .frame(width: 150, height: 84)
@@ -208,7 +206,7 @@ private struct HistoryRow: View {
                         .frame(height: 2)
                     }
                     .clipShape(.rect(cornerRadius: 10))
-                    .zoomSource(item.card, cornerRadius: 10)
+                    .videoCover(cornerRadius: 10)
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text(item.title)
@@ -232,7 +230,9 @@ private struct HistoryRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(height: 84)
+            .contentShape(.rect)
         }
+        .buttonStyle(PressableStyle())
         .accessibilityElement(children: .combine)
     }
 }

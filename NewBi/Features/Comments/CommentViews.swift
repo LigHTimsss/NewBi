@@ -257,7 +257,7 @@ struct CommentRow: View {
             .frame(width: 36, height: 36)
             .clipShape(.circle)
         if linksToSpace, let mid = reply.member.midValue {
-            NavigationLink(value: Route.space(mid: mid)) { image }
+            RouteLink(route: Route.space(mid: mid)) { image }
                 .buttonStyle(PressableStyle())
                 .accessibilityLabel("\(reply.member.uname) 的空间")
         } else {

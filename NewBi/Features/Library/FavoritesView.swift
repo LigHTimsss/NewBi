@@ -372,9 +372,8 @@ struct FolderView: View {
                 .opacity(0.4)
                 .contextMenu { removeButton(media) }
         } else {
-            NavigationLink(value: media.card) { VideoRow(card: media.card, subtitle: subtitle) }
+            VideoLink(card: media.card) { VideoRow(card: media.card, subtitle: subtitle) }
                 .buttonStyle(PressableStyle())
-                .zoomSource(media.card)
                 .contextMenu { removeButton(media) }
         }
     }

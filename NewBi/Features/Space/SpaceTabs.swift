@@ -107,7 +107,7 @@ private struct SeasonSection: View {
                 LazyHStack(alignment: .top, spacing: 10) {
                     ForEach(season.archives ?? []) { archive in
                         let card = archive.card(owner: owner)
-                        NavigationLink(value: card) {
+                        VideoLink(card: card) {
                             VStack(alignment: .leading, spacing: 6) {
                                 RemoteImage(url: archive.pic, size: CGSize(width: 160, height: 90))
                                     .frame(width: 160, height: 90)
@@ -120,6 +120,7 @@ private struct SeasonSection: View {
                                             .padding(5)
                                     }
                                     .clipShape(.rect(cornerRadius: 10))
+                                    .videoCover(cornerRadius: 10)
                                 Text(archive.title)
                                     .font(.system(size: 13))
                                     .lineLimit(2)
@@ -129,7 +130,6 @@ private struct SeasonSection: View {
                             }
                         }
                         .buttonStyle(PressableStyle())
-                        .zoomSource(card)
                         .watchLaterMenu(card)
                     }
                 }
@@ -201,7 +201,7 @@ struct SeasonView: View {
                 }
                 ForEach(Array(model.archives.enumerated()), id: \.element.id) { index, archive in
                     let card = archive.card(owner: nil)
-                    NavigationLink(value: card) {
+                    VideoLink(card: card, beforeOpen: { PlayQueue.shared.start(model.archives.map { $0.card(owner: nil) }, title: title) }) {
                         HStack(alignment: .top, spacing: 10) {
                             Text("\(index + 1)")
                                 .font(.system(size: 13, weight: .semibold))
@@ -213,10 +213,6 @@ struct SeasonView: View {
                         }
                     }
                     .buttonStyle(PressableStyle())
-                    .zoomSource(card)
-                    .simultaneousGesture(TapGesture().onEnded {
-                        PlayQueue.shared.start(model.archives.map { $0.card(owner: nil) }, title: title)
-                    })
                     .watchLaterMenu(card)
                     .riseIn(index: index)
                     .task { await model.loadMore(after: archive) }

@@ -433,9 +433,8 @@ private struct DynamicBody: View {
                     .onTapGesture { withAnimation(Motion.component) { expanded.toggle() } }
             }
             if let video = content?.video(author: modules.author) {
-                NavigationLink(value: video) { DynamicVideo(card: video) }
+                VideoLink(card: video) { DynamicVideo(card: video) }
                     .buttonStyle(PressableStyle())
-                    .zoomSource(video)
                     .watchLaterMenu(video)
             }
             let images = content?.images ?? []
@@ -471,6 +470,7 @@ private struct DynamicVideo: View {
                     .padding(.bottom, 7)
                 }
                 .clipShape(.rect(cornerRadius: 14))
+                .videoCover(cornerRadius: 14)
             Text(card.title)
                 .font(.system(size: 15, weight: .medium))
                 .lineLimit(2)

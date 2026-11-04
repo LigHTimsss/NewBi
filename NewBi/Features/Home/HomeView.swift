@@ -103,22 +103,21 @@ struct HomeView: View {
 
 private struct FeedPage: View {
     let model: FeedModel
+    @Environment(\.displayScale) private var scale
 
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
                 if let first = model.items.first {
-                    NavigationLink(value: first) { FeaturedBanner(card: first) }
+                    VideoLink(card: first) { FeaturedBanner(card: first) }
                         .buttonStyle(PressableStyle())
-                        .zoomSource(first, cornerRadius: 18)
                         .watchLaterMenu(first)
                         .riseIn(index: 0)
                 }
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 12) {
                     ForEach(Array(model.items.dropFirst().enumerated()), id: \.element.id) { index, card in
-                        NavigationLink(value: card) { VideoCardView(card: card) }
+                        VideoLink(card: card) { VideoCardView(card: card) }
                             .buttonStyle(PressableStyle())
-                            .zoomSource(card)
                             .watchLaterMenu(card)
                             .riseIn(index: index + 1)
                             .onAppear { Task { await model.loadMoreIfNeeded(after: card) } }
@@ -132,6 +131,13 @@ private struct FeedPage: View {
         }
         .contentMargins(.top, 56, for: .scrollContent)    // 顶部玻璃频道条
         .contentMargins(.bottom, 96, for: .scrollContent) // 底部玻璃导航
+        // 新一页到了就把封面下载、解码进内存：滑到时直接出图，不再一格格淡入
+        .onChange(of: model.items.count, initial: true) { old, new in
+            // 第一个是大横幅（尺寸不同，自己加载）；加载更多时只取新的一页，刷新后从头取
+            let start = old > 0 && old < new ? old : 1
+            guard new > start else { return }
+            RemoteImage.prefetch(model.items.dropFirst(start).map(\.pic), size: VideoCardView.coverSize, scale: scale)
+        }
         .overlay {
             if model.items.isEmpty {
                 if let error = model.error {
@@ -174,6 +180,7 @@ private struct FeaturedBanner: View {
                     .padding(14)
             }
             .clipShape(.rect(cornerRadius: 18))
+            .videoCover(cornerRadius: 18)
     }
 }
 
@@ -182,11 +189,11 @@ struct VideoCardView: View {
     /// 空间页里都是同一个 UP 主，不显示
     var showsOwner = true
     /// 两列：Pro Max 上 (430 - 16*2 - 10) / 2 = 194pt，按最大值请求一次即可复用
-    private let coverSize = CGSize(width: 194, height: 118)
+    static let coverSize = CGSize(width: 194, height: 118)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            RemoteImage(url: card.pic, size: coverSize)
+            RemoteImage(url: card.pic, size: Self.coverSize)
                 .aspectRatio(174.0 / 106.0, contentMode: .fit) // 设计稿 174×106
                 .overlay(alignment: .bottom) {
                     LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
@@ -211,6 +218,7 @@ struct VideoCardView: View {
                     .padding(.bottom, 5)
                 }
                 .clipShape(.rect(cornerRadius: 12))
+                .videoCover(cornerRadius: 12)
 
             Text(card.title)
                 .font(.system(size: 14, weight: .medium))

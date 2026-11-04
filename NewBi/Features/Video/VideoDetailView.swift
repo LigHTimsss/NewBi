@@ -33,9 +33,18 @@ final class VideoDetailModel {
     var currentCid: Int? { currentPart?.cid ?? detail?.cid }
     var maxCoins: Int { 2 }
 
+    @ObservationIgnored private var loadStarted = false
+
     init(card: VideoCard) {
         self.card = card
         comments = CommentModel(oid: card.id)
+    }
+
+    /// 舞台打开视频时就开始取流（和展开动画同时进行），页面出现时不再重复
+    func loadIfNeeded() async {
+        guard !loadStarted else { return }
+        loadStarted = true
+        await load()
     }
 
     func load() async {
@@ -186,31 +195,24 @@ final class VideoDetailModel {
 }
 
 /// 「视频详情」画板：顶部播放器 + 简介/评论 Tab + UP 主、三连、相关推荐。
+/// 放在舞台（VideoStage）上，不在导航栈里：从卡片封面展开、返回时收进迷你胶囊或卡片都由舞台负责。
 /// 全屏不另开页面：同一个播放器视图原地放大到整屏（AVPlayerLayer、弹幕图层都不重建），界面转为横屏。
 struct VideoDetailView: View {
-    let card: VideoCard
-    /// 连播队列：播完后换到下一个视频（由 VideoDestination 原地替换）
+    let model: VideoDetailModel
+    /// 连播队列：播完后换到下一个视频（舞台原地替换）
     var onAdvance: ((VideoCard) -> Void)? = nil
-    /// 返回时该收进迷你胶囊（true）还是收回卡片（false），随播放状态变化
-    var onCollapseTarget: ((Bool) -> Void)? = nil
-    @State private var model: VideoDetailModel?
     @State private var upNext: VideoCard?
     @State private var tab = 0
     /// 简介 → 评论的横滑进度 0…1，Tab 下划线跟手
     @State private var pageProgress: CGFloat = 0
     @State private var isFullscreen = false
     @State private var locked = false
-    @Environment(\.dismiss) private var dismiss
+    /// 在画面上下拉收起：只认从画面里（进度条以上）开始的竖向拖动
+    @State private var pulling: Bool?
+    @State private var playerBox = FrameBox()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var parentOpenURL
     @AppStorage("backgroundPlay") private var backgroundPlay = true
-    @AppStorage("miniPlayer") private var miniPlayerEnabled = true
-
-    /// 与 NowPlaying.minimize 的判断一致：开着迷你条、正在播放
-    private var collapsesToMini: Bool {
-        guard miniPlayerEnabled, let model else { return false }
-        return model.player.isPlaying
-    }
 
     var body: some View {
         GeometryReader { geo in
@@ -223,15 +225,11 @@ struct VideoDetailView: View {
                     DetailTabs(
                         selection: tab,
                         progress: pageProgress,
-                        replyCount: model?.comments.total ?? model?.detail?.stat.reply
+                        replyCount: model.comments.total ?? model.detail?.stat.reply
                     ) { index in
                         withAnimation(Motion.component) { tab = index }
                     }
-                    if let model {
-                        DetailPager(model: model, tab: $tab, progress: $pageProgress)
-                    } else {
-                        Spacer(minLength: 0)
-                    }
+                    DetailPager(model: model, tab: $tab, progress: $pageProgress)
                 }
                 .frame(height: isFullscreen ? 0 : nil)
                 .clipped()
@@ -240,44 +238,26 @@ struct VideoDetailView: View {
                 .accessibilityHidden(isFullscreen)
             }
         }
-        // 不用 initial：从迷你条点回来时胶囊位已经拿着这个 id（展开要从那里开始），刚出现时不能先交还
-        .onChange(of: collapsesToMini) { _, value in onCollapseTarget?(value) }
         .background(isFullscreen ? Color.black : Theme.background)
-        .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden(isFullscreen)
         .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
         .task {
-            guard model == nil else { return }
-            // 从迷你播放条点回来：直接接回同一个播放器，不重新取流
-            if let restored = NowPlaying.shared.claim(for: card) {
-                model = restored
-                configureQueue(restored)
-                return
-            }
-            // 延迟创建：避免视图重建时重复创建 AVPlayer
-            let created = VideoDetailModel(card: card)
-            model = created
-            configureQueue(created)
-            await created.load()
+            configureQueue()
+            await model.loadIfNeeded()
         }
-        .onAppear {
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            // 从上层页面（UP 主空间、相关推荐）返回：取消待定的暂停
-            if let model { NowPlaying.shared.detailAppeared(model) }
-            BackGesture.shared.isBlocked = isFullscreen
-        }
-        // 返回时若正在播放就缩成迷你播放条；进入相关推荐等其它页面时暂停。
-        // 都不是时模型随页面释放，PlayerController 在 deinit 中清理
+        .onAppear { UIDevice.current.beginGeneratingDeviceOrientationNotifications() }
+        // 收起后模型由舞台持有（迷你胶囊）或随之释放，PlayerController 在 deinit 中清理
         .onDisappear {
-            if let model { NowPlaying.shared.detailDisappeared(model) }
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
-            if isFullscreen { Orientation.lock(.portrait) }
-            BackGesture.shared.isBlocked = false
+            if isFullscreen {
+                Orientation.lock(.portrait)
+                VideoStage.shared.isFullscreen = false
+            }
         }
-        .toast(Binding(get: { model?.resumeHint }, set: { model?.resumeHint = $0 }), bottomPadding: 40)
+        .toast(Binding(get: { model.resumeHint }, set: { model.resumeHint = $0 }), bottomPadding: 40)
         // 评论里的时间点：跳到该位置并继续播放；其它链接交回上层
         .environment(\.openURL, OpenURLAction { url in
-            if case .seek(let seconds) = AppLink.parse(url), let model {
+            if case .seek(let seconds) = AppLink.parse(url) {
                 model.player.seek(seconds: Double(seconds))
                 model.player.play()
                 model.resumeHint = "已跳到 \(seconds.durationText)"
@@ -291,7 +271,7 @@ struct VideoDetailView: View {
             followDeviceOrientation()
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .background, let model else { return }
+            guard phase == .background else { return }
             Task { await model.reportProgress() }
             guard !backgroundPlay, !model.player.isPictureInPictureActive else { return }
             model.player.pause()
@@ -300,21 +280,27 @@ struct VideoDetailView: View {
 
     private var player: some View {
         ZStack {
-            if let model {
+            // 收起 / 展开途中画面在舞台上（跟着容器走），这里空着
+            if !model.player.isMinimized {
                 PlayerSurface(controller: model.player)
                     .ignoresSafeArea(edges: isFullscreen ? .all : [])
+                // 第一帧出来之前盖着封面（和卡片、舞台同一张图），不黑屏
+                VideoPoster(card: model.card)
+                    .opacity(model.player.hasFrame ? 0 : 1)
+                    .animation(Motion.micro, value: model.player.hasFrame)
+                    .allowsHitTesting(false)
                 if isFullscreen {
                     FullscreenOverlay(model: model, locked: $locked, onExit: { setFullscreen(false) })
                 } else {
                     CompactOverlay(
                         controller: model.player,
                         card: model.card,
-                        onBack: { dismiss() },
+                        onBack: { VideoStage.shared.back() },
                         onFullscreen: { setFullscreen(true) }
                     )
                 }
             } else {
-                Color.black
+                Color.clear
             }
         }
         .overlay(alignment: .bottom) {
@@ -329,13 +315,34 @@ struct VideoDetailView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .background(Color.black.ignoresSafeArea(edges: isFullscreen ? .all : .top))
+        .background(Color.black.ignoresSafeArea(edges: isFullscreen ? .all : .top).opacity(model.player.isMinimized ? 0 : 1))
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { playerBox.maxY = $0 }
+        // 在画面上往下拉：页面跟手缩小，松手收进胶囊 / 卡片（同 iOS 的下拉关闭）。
+        // 用整屏坐标：拖动中页面在缩小，局部坐标会跟着变
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 14, coordinateSpace: .global)
+                .onChanged { value in
+                    if pulling == nil {
+                        let t = value.translation
+                        // 进度条那一条不算（那里左右拖是调进度）
+                        pulling = value.startLocation.y < playerBox.maxY - 50 && t.height > abs(t.width)
+                    }
+                    if pulling == true { VideoStage.shared.pageDragChanged(value.translation, kind: .down) }
+                }
+                .onEnded { value in
+                    if pulling == true {
+                        VideoStage.shared.pageDragEnded(value.translation, velocity: value.velocity, kind: .down)
+                    }
+                    pulling = nil
+                },
+            including: isFullscreen ? .subviews : .all
+        )
     }
 
     /// 在连播队列里时：播完弹出「即将播放」，3 秒后换到下一个
-    private func configureQueue(_ model: VideoDetailModel) {
+    private func configureQueue() {
         guard onAdvance != nil else { return }
-        let bvid = card.bvid
+        let bvid = model.card.bvid
         model.player.onEnded = {
             guard let next = PlayQueue.shared.next(after: bvid) else { return }
             withAnimation(Motion.component) { upNext = next }
@@ -345,8 +352,8 @@ struct VideoDetailView: View {
     private func setFullscreen(_ on: Bool, preferred: UIInterfaceOrientationMask = .landscapeRight) {
         if !on { locked = false }
         isFullscreen = on
-        // 全屏里左右滑是拖进度，关掉侧滑返回
-        BackGesture.shared.isBlocked = on
+        // 全屏里不能收起（左右滑是拖进度）
+        VideoStage.shared.isFullscreen = on
         if on {
             Orientation.lock(.landscape, preferred: preferred)
         } else {
@@ -355,7 +362,7 @@ struct VideoDetailView: View {
     }
 
     private func followDeviceOrientation() {
-        guard model != nil, !locked else { return }
+        guard !locked, !model.player.isMinimized else { return }
         let device = UIDevice.current.orientation
         if let mask = Orientation.interfaceMask(for: device), !isFullscreen {
             setFullscreen(true, preferred: mask)
@@ -730,9 +737,8 @@ private struct IntroSection: View {
 
                     LazyVStack(spacing: 12) {
                         ForEach(Array(model.related.enumerated()), id: \.element.id) { index, card in
-                            NavigationLink(value: card) { VideoRow(card: card) }
+                            VideoLink(card: card) { VideoRow(card: card) }
                                 .buttonStyle(PressableStyle())
-                                .zoomSource(card)
                                 .watchLaterMenu(card)
                                 .riseIn(index: index)
                         }
@@ -765,7 +771,7 @@ private struct IntroSection: View {
     private func uploader(_ owner: Owner) -> some View {
         HStack(spacing: 10) {
             // 点头像或名字进入 UP 主空间
-            NavigationLink(value: Route.space(mid: owner.mid)) {
+            RouteLink(route: Route.space(mid: owner.mid)) {
                 HStack(spacing: 10) {
                     RemoteImage(url: owner.face, size: CGSize(width: 40, height: 40))
                         .frame(width: 40, height: 40)
@@ -1005,6 +1011,7 @@ struct VideoRow: View {
                         .padding(.bottom, 4)
                 }
                 .clipShape(.rect(cornerRadius: 10))
+                .videoCover(cornerRadius: 10)
             VStack(alignment: .leading) {
                 Text(attributedTitle ?? AttributedString(card.title))
                     .font(.system(size: 14, weight: .medium))
@@ -1021,4 +1028,9 @@ struct VideoRow: View {
         }
         .frame(height: 84)
     }
+}
+
+/// 只在手势开始时读一次的位置，不触发重绘
+final class FrameBox {
+    var maxY: CGFloat = .infinity
 }

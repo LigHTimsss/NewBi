@@ -112,7 +112,7 @@ struct WatchLaterView: View {
                         .foregroundStyle(Theme.secondaryText)
                         .contentTransition(.numericText())
                     Spacer()
-                    NavigationLink(value: first.card) {
+                    VideoLink(card: first.card, morphs: false, beforeOpen: { armQueue() }) {
                         Label("开始播放", systemImage: "play.fill")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.white)
@@ -122,16 +122,13 @@ struct WatchLaterView: View {
                     }
                     .buttonStyle(PressableStyle())
                     .fixedSize()
-                    .simultaneousGesture(TapGesture().onEnded { armQueue() })
                 }
                 .listRowBackground(Theme.background)
                 .listRowSeparator(.hidden)
             }
 
             ForEach(model.items) { item in
-                WatchLaterRow(item: item)
-                    // 从这里进入的视频播完后按列表顺序连播（已看完的跳过）
-                    .simultaneousGesture(TapGesture().onEnded { armQueue(from: item) })
+                WatchLaterRow(item: item) { armQueue(from: item) }  // 从这里进入的视频播完后按列表顺序连播（已看完的跳过）
                     .listRowBackground(Theme.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
@@ -186,12 +183,11 @@ struct WatchLaterView: View {
 
 private struct WatchLaterRow: View {
     let item: WatchLaterItem
+    var onOpen: () -> Void = {}
     @Environment(\.accent) private var accent
 
     var body: some View {
-        ZStack {
-            // List 里的 NavigationLink 会带箭头，这里用透明链接 + 自定义行
-            NavigationLink(value: item.card) { EmptyView() }.opacity(0)
+        VideoLink(card: item.card, beforeOpen: onOpen) {
             HStack(spacing: 12) {
                 RemoteImage(url: item.pic, size: CGSize(width: 150, height: 84))
                     .frame(width: 150, height: 84)
@@ -213,7 +209,7 @@ private struct WatchLaterRow: View {
                         }
                     }
                     .clipShape(.rect(cornerRadius: 10))
-                    .zoomSource(item.card, cornerRadius: 10)
+                    .videoCover(cornerRadius: 10)
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text(item.title)
@@ -237,7 +233,9 @@ private struct WatchLaterRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(height: 84)
+            .contentShape(.rect)
         }
+        .buttonStyle(PressableStyle())
         .accessibilityElement(children: .combine)
     }
 

@@ -35,6 +35,8 @@ final class PlayerController {
     let danmaku = DanmakuEngine()
 
     private(set) var isPlaying = false
+    /// 已经出过画面（第一次 ready）：之前播放区盖着封面
+    private(set) var hasFrame = false
     private(set) var currentTime: Double = 0
     private(set) var bufferedTime: Double = 0
     private(set) var duration: Double = 0
@@ -273,6 +275,7 @@ final class PlayerController {
         switch event {
         case .ready:
             itemWasReady = true
+            hasFrame = true
             let seconds = engine.duration
             if seconds > 0 { duration = seconds }
             RemoteControl.shared.refresh(self)
@@ -429,8 +432,8 @@ struct PlayerSurface: UIViewRepresentable {
     var showsDanmaku = true
     /// 放在按钮里时设为 false：UIKit 视图默认接收触摸，会挡住外层按钮
     var interactive = true
-    /// 迷你条里的画面。同一个画面视图只能在一处：缩小中归迷你条，否则归视频页。
-    /// 不按这个分，迷你条淡出时还会刷新一次、把画面抢回去一起带走，视频页就黑屏了
+    /// 舞台上的画面。同一个画面视图只能在一处：收起 / 展开途中和停在胶囊时归舞台（isMinimized），铺满后归视频页。
+    /// 不按这个分，两处都刷新时会互相抢，视频页就黑屏了
     var isMini = false
 
     func makeUIView(context: Context) -> PlayerHostView {

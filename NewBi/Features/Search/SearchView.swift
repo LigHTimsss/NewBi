@@ -354,7 +354,7 @@ private struct SearchResults: View {
                     switch model.kind {
                     case .video:
                         ForEach(Array(model.videos.enumerated()), id: \.element.id) { index, video in
-                            NavigationLink(value: video.card) {
+                            VideoLink(card: video.card) {
                                 VideoRow(
                                     card: video.card,
                                     attributedTitle: BiliHTML.highlighted(video.titleHTML, color: accent.accentText(scheme)),
@@ -362,7 +362,6 @@ private struct SearchResults: View {
                                 )
                             }
                             .buttonStyle(PressableStyle())
-                            .zoomSource(video.card)
                             .watchLaterMenu(video.card)
                             .riseIn(index: index)
                             .onAppear { model.loadMore(after: video.id) }

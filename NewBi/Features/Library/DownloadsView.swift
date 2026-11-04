@@ -118,9 +118,7 @@ private struct CachedRow: View {
     let record: DownloadRecord
 
     var body: some View {
-        ZStack {
-            // 点进视频页：检测到本地缓存，直接播本地文件（断网也能看）
-            NavigationLink(value: record.card) { EmptyView() }.opacity(0)
+        VideoLink(card: record.card) {
             HStack(spacing: 14) {
                 RemoteImage(url: record.coverURL, size: CGSize(width: 128, height: 72))
                     .frame(width: 128, height: 72)
@@ -133,7 +131,7 @@ private struct CachedRow: View {
                             .padding(5)
                     }
                     .clipShape(.rect(cornerRadius: 12))
-                    .zoomSource(record.card, cornerRadius: 12)
+                    .videoCover(cornerRadius: 12)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(record.title).font(.system(size: 16, weight: .semibold)).lineLimit(2)
                     Text("\(record.qualityName) · \(DownloadsView.size(record.totalBytes))")
@@ -146,7 +144,9 @@ private struct CachedRow: View {
                     .foregroundStyle(.tint)
                     .accessibilityLabel("已下载")
             }
+            .contentShape(.rect)
         }
+        .buttonStyle(PressableStyle())
     }
 }
 

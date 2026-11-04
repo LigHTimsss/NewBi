@@ -395,9 +395,8 @@ private struct SpaceHome: View {
         VStack(alignment: .leading, spacing: 24) {
             if let top = model.topVideo {
                 section("置顶视频") {
-                    NavigationLink(value: top) { FeaturedVideo(card: top) }
+                    VideoLink(card: top) { FeaturedVideo(card: top) }
                         .buttonStyle(PressableStyle())
-                        .zoomSource(top)
                 }
             }
 
@@ -406,9 +405,8 @@ private struct SpaceHome: View {
                     ScrollView(.horizontal) {
                         LazyHStack(spacing: 10) {
                             ForEach(model.masterpieces) { card in
-                                NavigationLink(value: card) { VideoCardView(card: card, showsOwner: false) }
+                                VideoLink(card: card) { VideoCardView(card: card, showsOwner: false) }
                                     .buttonStyle(PressableStyle())
-                                    .zoomSource(card)
                                     .frame(width: 194)
                             }
                         }
@@ -425,9 +423,8 @@ private struct SpaceHome: View {
                 section("最近投稿", trailing: "查看全部", action: showAll) {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 12) {
                         ForEach(Array(model.recent.enumerated()), id: \.element.id) { index, video in
-                            NavigationLink(value: video.card) { VideoCardView(card: video.card, showsOwner: false) }
+                            VideoLink(card: video.card) { VideoCardView(card: video.card, showsOwner: false) }
                                 .buttonStyle(PressableStyle())
-                                .zoomSource(video.card)
                                 .watchLaterMenu(video.card)
                                 .riseIn(index: index)
                         }
@@ -493,6 +490,7 @@ private struct FeaturedVideo: View {
                     .padding(.bottom, 7)
                 }
                 .clipShape(.rect(cornerRadius: 14))
+                .videoCover(cornerRadius: 14)
             Text(card.title)
                 .font(.system(size: 15, weight: .medium))
                 .lineLimit(2)
@@ -532,9 +530,8 @@ private struct SpaceVideos: View {
             }
 
             ForEach(Array(model.videos.enumerated()), id: \.element.id) { index, video in
-                NavigationLink(value: video.card) { VideoRow(card: video.card, subtitle: video.subtitle) }
+                VideoLink(card: video.card) { VideoRow(card: video.card, subtitle: video.subtitle) }
                     .buttonStyle(PressableStyle())
-                    .zoomSource(video.card)
                     .watchLaterMenu(video.card)
                     .riseIn(index: index)
                     .onAppear { model.loadMore(after: video) }
