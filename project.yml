@@ -13,6 +13,9 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     # 体积 / 性能：去除未用代码，Release 全模块优化
     DEAD_CODE_STRIPPING: YES
+    # KSPlayer 依赖的 FFmpeg 二进制包（Libavcodec 等）在 Xcode 26 默认的显式模块扫描下找不到，关掉
+    SWIFT_ENABLE_EXPLICIT_MODULES: NO
+    _EXPERIMENTAL_SWIFT_EXPLICIT_MODULES: NO
     STRIP_INSTALLED_PRODUCT: YES
   configs:
     Release:
