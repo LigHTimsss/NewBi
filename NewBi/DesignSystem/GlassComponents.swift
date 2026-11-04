@@ -30,16 +30,123 @@ struct GlowLine: View {
     }
 }
 
-struct SelectionPill: View {
-    var id: String
-    var namespace: Namespace.ID
+// MARK: - 液态选择器：底部 Tab 栏、各处分段控件共用
+//
+// 整条只有一个指示器（胶囊 + 发光线是同一个视图），位置由选中项直接算出来，
+// 切换时胶囊和线一起走同一条弹簧曲线，不会一前一后。
+// 按住后指示器浮起成玻璃透镜、跟手滑动，经过的项高亮并轻触反馈，松手即切到手指下那一项（系统 Tab 栏同款）；
+// 轻点也走同一个手势：透镜跳到手指处再落回该项。
+
+struct LiquidSelector<Item: View>: View {
+    let count: Int
+    let selected: Int
+    var height: CGFloat
+    /// 放在可滚动页面里时为 true：不独占触摸（页面照常上下滚动），竖向滑动不会误切
+    var allowsScrolling = false
+    var onSelect: (Int) -> Void
+    @ViewBuilder var item: (_ index: Int, _ highlighted: Bool) -> Item
+
+    /// 按住时手指的位置；用 GestureState，手势被页面滚动抢走时也会自动复位
+    private struct Touch {
+        var x: CGFloat?
+        /// 已判定为竖向滚动：本次触摸不再浮起、松手不切换
+        var cancelled = false
+    }
+
+    @GestureState private var touch = Touch()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var fingerX: CGFloat? { touch.cancelled ? nil : touch.x }
+    private var pressing: Bool { fingerX != nil }
+
+    var body: some View {
+        GeometryReader { geo in
+            let slot = geo.size.width / CGFloat(max(count, 1))
+            let hover = fingerX.map { index(at: $0, slot: slot) } ?? selected
+            // 按住时跟手（限制在两端之内），松开后回到选中项中心
+            let center = fingerX.map { min(max($0, slot / 2), geo.size.width - slot / 2) } ?? (CGFloat(selected) + 0.5) * slot
+
+            ZStack(alignment: .topLeading) {
+                SelectorIndicator(lifted: pressing && !reduceMotion)
+                    .frame(width: slot, height: geo.size.height)
+                    .position(x: center, y: geo.size.height / 2)
+                    .animation(pressing ? .interactiveSpring(response: 0.22, dampingFraction: 0.82) : Motion.component, value: center)
+                    .animation(Motion.component, value: pressing)
+
+                HStack(spacing: 0) {
+                    ForEach(0..<count, id: \.self) { index in
+                        item(index, index == hover)
+                            .frame(width: slot, height: geo.size.height)
+                            .contentShape(.rect)
+                            .animation(Motion.micro, value: hover)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityAddTraits(index == selected ? [.isButton, .isSelected] : .isButton)
+                            .accessibilityAction { onSelect(index) }
+                    }
+                }
+            }
+            .contentShape(.rect)
+            .modifier(SelectorGesture(allowsScrolling: allowsScrolling, gesture: drag(slot: slot)))
+            .sensoryFeedback(.selection, trigger: hover) { _, _ in pressing }
+        }
+        .frame(height: height)
+    }
+
+    private func index(at x: CGFloat, slot: CGFloat) -> Int {
+        min(max(Int(x / slot), 0), count - 1)
+    }
+
+    private func drag(slot: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .updating($touch) { value, state, _ in
+                guard !state.cancelled else { return }
+                if allowsScrolling, Self.isVerticalScroll(value) {
+                    state.cancelled = true
+                } else {
+                    state.x = value.location.x
+                }
+            }
+            .onEnded { value in
+                // 松手时再按整段位移判断一次：竖向滚动过的不算点选
+                guard !(allowsScrolling && Self.isVerticalScroll(value)) else { return }
+                onSelect(index(at: value.location.x, slot: slot))
+            }
+    }
+
+    /// 可滚动页面里明显的竖向滑动（交给页面滚动）
+    private static func isVerticalScroll(_ value: DragGesture.Value) -> Bool {
+        let dx = abs(value.translation.width), dy = abs(value.translation.height)
+        return dy > 12 && dy > dx * 1.5
+    }
+}
+
+/// 独占（Tab 栏）还是与页面滚动并存（分段控件）
+private struct SelectorGesture<G: Gesture>: ViewModifier {
+    let allowsScrolling: Bool
+    let gesture: G
+
+    func body(content: Content) -> some View {
+        if allowsScrolling {
+            content.simultaneousGesture(gesture)
+        } else {
+            content.gesture(gesture)
+        }
+    }
+}
+
+/// 指示器：平时是浅色胶囊 + 底部呼吸发光线；按住时浮起成放大的玻璃透镜
+private struct SelectorIndicator: View {
+    var lifted: Bool
     @Environment(\.accent) private var accent
 
     var body: some View {
         Capsule()
-            .fill(Theme.selection)
+            .fill(Theme.selection.opacity(lifted ? 0.4 : 1))
             .overlay(alignment: .bottom) { GlowLine(color: accent).padding(.bottom, 3) }
-            .matchedGeometryEffect(id: id, in: namespace)
+            .glassEffect(lifted ? .clear.interactive() : .identity, in: .capsule)
+            .scaleEffect(x: lifted ? 1.08 : 1, y: lifted ? 1.16 : 1)
+            .shadow(color: .black.opacity(lifted ? 0.18 : 0), radius: lifted ? 10 : 0, y: lifted ? 4 : 0)
+            .allowsHitTesting(false)
     }
 }
 
@@ -74,43 +181,38 @@ struct GlassTabBar: View {
     var badges: Set<AppTab> = []
     var onSelect: (AppTab) -> Void
     var onSearch: () -> Void
-    @Namespace private var ns
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
-                HStack(spacing: 2) {
-                    ForEach(AppTab.allCases) { tab in
-                        let on = tab == selection
-                        Button { onSelect(tab) } label: {
-                            VStack(spacing: 2) {
-                                Image(systemName: tab.icon(selected: on))
-                                    .font(.system(size: 20))
-                                    .frame(height: 24)
-                                    .overlay(alignment: .topTrailing) {
-                                        if badges.contains(tab) {
-                                            Circle()
-                                                .fill(accent)
-                                                .frame(width: 8, height: 8)
-                                                .offset(x: 5, y: -1)
-                                                .transition(.scale.combined(with: .opacity))
-                                        }
-                                    }
-                                    .animation(Motion.component, value: badges)
-                                Text(tab.title)
-                                    .font(.system(size: 10, weight: on ? .semibold : .medium))
+                // 按住可左右滑动切换；高亮跟着手指走，松手才真正切页
+                LiquidSelector(count: AppTab.allCases.count, selected: selection.rawValue, height: 52) { index in
+                    if let tab = AppTab(rawValue: index) { onSelect(tab) }
+                } item: { index, highlighted in
+                    let tab = AppTab(rawValue: index) ?? .home
+                    VStack(spacing: 2) {
+                        Image(systemName: tab.icon(selected: highlighted))
+                            .font(.system(size: 20))
+                            .frame(height: 24)
+                            .contentTransition(.symbolEffect(.replace))
+                            .overlay(alignment: .topTrailing) {
+                                if badges.contains(tab) {
+                                    Circle()
+                                        .fill(accent)
+                                        .frame(width: 8, height: 8)
+                                        .offset(x: 5, y: -1)
+                                        .transition(.scale.combined(with: .opacity))
+                                }
                             }
-                            .foregroundStyle(on ? accent.accentText(scheme) : .primary)
-                            .frame(maxWidth: .infinity, minHeight: 52)
-                            .background { if on { SelectionPill(id: "tab", namespace: ns) } }
-                            .contentShape(.capsule)
-                        }
-                        .buttonStyle(PressableStyle())
-                        .accessibilityAddTraits(on ? .isSelected : [])
-                        .accessibilityValue(badges.contains(tab) ? "有更新" : "")
+                            .animation(Motion.component, value: badges)
+                        Text(tab.title)
+                            .font(.system(size: 10, weight: highlighted ? .semibold : .medium))
                     }
+                    .foregroundStyle(highlighted ? accent.accentText(scheme) : .primary)
+                    .accessibilityLabel(tab.title)
+                    .accessibilityValue(badges.contains(tab) ? "有更新" : "")
                 }
                 .padding(5)
                 .glassEffect(.regular.interactive(), in: .capsule)
@@ -137,27 +239,19 @@ struct GlassSegmented<Value: Hashable>: View {
     let options: [Value]
     @Binding var selection: Value
     let title: (Value) -> String
-    @Namespace private var ns
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(options, id: \.self) { item in
-                let on = item == selection
-                Button {
-                    withAnimation(Motion.tab) { selection = item }
-                } label: {
-                    Text(title(item))
-                        .font(.system(size: 14, weight: on ? .bold : .medium))
-                        .foregroundStyle(on ? accent.accentText(scheme) : Theme.secondaryText)
-                        .frame(maxWidth: .infinity, minHeight: 34)
-                        .background { if on { SelectionPill(id: "segment", namespace: ns) } }
-                        .contentShape(.capsule)
-                }
-                .buttonStyle(PressableStyle())
-                .accessibilityAddTraits(on ? .isSelected : [])
-            }
+        // 分段控件多半在可滚动页面里：不独占触摸，竖向滑动照常滚动页面
+        LiquidSelector(count: options.count, selected: options.firstIndex(of: selection) ?? 0, height: 34, allowsScrolling: true) { index in
+            withAnimation(Motion.tab) { selection = options[index] }
+        } item: { index, highlighted in
+            Text(title(options[index]))
+                .font(.system(size: 14, weight: highlighted ? .bold : .medium))
+                .foregroundStyle(highlighted ? accent.accentText(scheme) : Theme.secondaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .padding(.horizontal, 3)
         .frame(height: 40)
