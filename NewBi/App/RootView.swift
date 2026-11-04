@@ -52,6 +52,8 @@ struct RootView: View {
             .background(Theme.background)
             // 重新打开被隐藏导航栏关掉的侧滑返回
             .background { BackGestureEnabler().frame(width: 0, height: 0) }
+            // 迷你胶囊位（底栏上方，和迷你条同一位置）：正在播放的视频返回时收缩到这里
+            .miniSlot(bottom: 72)
             .overlay(alignment: .bottom) {
                 GlassTabBar(
                     selection: tab,
@@ -96,18 +98,12 @@ struct RootView: View {
                     }
                 }
                 .miniPlayerInset()
+                .modifier(RouteMiniSlot(route: route))
             }
         }
         .environment(\.zoomNamespace, zoom)
         // 迷你播放条：根页面浮在底栏上方，二级页面贴底；视频页收缩到胶囊位后在原地淡入，
         // 点它时视频页从胶囊位展开（缩放转场），它自己淡出
-        // 迷你胶囊位：整个 App 只有这一个（多个同 id 的转场源会配错，视频页会缩回自己身上而「直接消失」），
-        // 和迷你条同一位置：根页面在底栏上方，二级页面贴底。正在播放的视频返回时收缩到这里
-        .overlay(alignment: .bottom) {
-            MiniSlot()
-                .padding(.bottom, path.isEmpty ? 72 : 8)
-                .environment(\.zoomNamespace, zoom) // 这层 overlay 在上面的 environment 之外，单独传
-        }
         .overlay(alignment: .bottom) {
             if let mini = NowPlaying.shared.minimized {
                 MiniPlayerBar(model: mini) { path.append(mini.card) }
@@ -167,3 +163,15 @@ struct RootView: View {
     }
 }
 
+/// 二级页面的迷你胶囊位（贴底）。视频页不放：返回时视频页会配到自己身上的胶囊位、缩没了
+private struct RouteMiniSlot: ViewModifier {
+    let route: Route
+
+    func body(content: Content) -> some View {
+        if case .video = route {
+            content
+        } else {
+            content.miniSlot(bottom: 8)
+        }
+    }
+}

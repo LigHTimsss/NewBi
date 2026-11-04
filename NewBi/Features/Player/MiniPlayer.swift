@@ -120,7 +120,7 @@ struct MiniPlayerBar: View {
                 HStack(spacing: 10) {
                     // 直接显示正在播放的画面（同一个播放器图层，不额外解码）；
                     // 这是 UIKit 视图，必须关掉它的触摸，否则会吞掉「回到视频」按钮的点击
-                    PlayerSurface(controller: player, showsDanmaku: false, interactive: false)
+                    PlayerSurface(controller: player, showsDanmaku: false, interactive: false, isMini: true)
                         .frame(width: 64, height: 36)
                         .clipShape(.rect(cornerRadius: 8))
                         .allowsHitTesting(false)

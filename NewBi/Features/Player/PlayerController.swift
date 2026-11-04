@@ -429,6 +429,9 @@ struct PlayerSurface: UIViewRepresentable {
     var showsDanmaku = true
     /// 放在按钮里时设为 false：UIKit 视图默认接收触摸，会挡住外层按钮
     var interactive = true
+    /// 迷你条里的画面。同一个画面视图只能在一处：缩小中归迷你条，否则归视频页。
+    /// 不按这个分，迷你条淡出时还会刷新一次、把画面抢回去一起带走，视频页就黑屏了
+    var isMini = false
 
     func makeUIView(context: Context) -> PlayerHostView {
         let view = PlayerHostView()
@@ -438,8 +441,9 @@ struct PlayerSurface: UIViewRepresentable {
     }
 
     func updateUIView(_ view: PlayerHostView, context: Context) {
-        // 读取 engine 建立观察：切换引擎时自动换上新画面
-        view.setVideo(controller.engine.view)
+        // 读取 engine / isMinimized 建立观察：切换引擎、缩小 / 展开时自动换到该在的地方
+        let video = controller.engine.view
+        if controller.isMinimized == isMini { view.setVideo(video) }
         view.mirrored = controller.mirrored
     }
 }
