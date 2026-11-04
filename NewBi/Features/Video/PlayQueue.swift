@@ -32,22 +32,28 @@ final class PlayQueue {
 /// 同时是缩放转场的目的地：从卡片（或迷你胶囊）展开；返回时正在播放就收进迷你胶囊，否则收回卡片
 struct VideoDestination: View {
     @State private var card: VideoCard
-    /// 返回时收进迷你胶囊（还在播放）还是收回卡片（暂停 / 播完）
-    @State private var collapsesToMini: Bool
+    /// 缩放转场的 id：固定为打开这一页的视频（系统推入时就记下，连播换视频也不变）
+    private let zoomID: String
 
     init(card: VideoCard) {
         _card = State(initialValue: card)
-        // 从迷你条点进来：从胶囊位展开
-        _collapsesToMini = State(initialValue: NowPlaying.shared.minimized?.card.bvid == card.bvid)
+        zoomID = ZoomID.card(card)
     }
 
     var body: some View {
         VideoDetailView(card: card, onAdvance: { next in
             withAnimation(Motion.component) { card = next }
-        }, onCollapseTarget: { collapsesToMini = $0 })
+        }, onCollapseTarget: { [zoomID] collapses in
+            // 正在播放：胶囊位代领这一页的 id，返回时收进胶囊；暂停 / 播完：交还，收回卡片
+            if collapses {
+                ZoomRouting.shared.slotID = zoomID
+            } else {
+                ZoomRouting.shared.release(zoomID)
+            }
+        })
         .id(card.bvid)
         .transition(.opacity.combined(with: .scale(scale: 0.98)))
-        .zoomDestination(id: collapsesToMini ? ZoomID.mini : ZoomID.card(card))
+        .zoomDestination(id: zoomID)
     }
 }
 

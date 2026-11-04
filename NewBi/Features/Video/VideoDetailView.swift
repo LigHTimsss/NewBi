@@ -240,6 +240,7 @@ struct VideoDetailView: View {
                 .accessibilityHidden(isFullscreen)
             }
         }
+        // 不用 initial：从迷你条点回来时胶囊位已经拿着这个 id（展开要从那里开始），刚出现时不能先交还
         .onChange(of: collapsesToMini) { _, value in onCollapseTarget?(value) }
         .background(isFullscreen ? Color.black : Theme.background)
         .toolbar(.hidden, for: .navigationBar)

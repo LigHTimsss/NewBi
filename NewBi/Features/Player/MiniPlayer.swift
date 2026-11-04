@@ -37,8 +37,7 @@ final class NowPlaying {
             if change.popped {
                 minimize(model)
             } else {
-                model.player.pause()
-                Task { await model.reportProgress() }
+                stop(model)
             }
             return
         }
@@ -48,8 +47,7 @@ final class NowPlaying {
             // 期间被配上（已缩小）或页面又回来了（pending 被清掉）就什么都不做
             guard let pending, pending.model === model else { return }
             self.pending = nil
-            model.player.pause()
-            await model.reportProgress()
+            stop(model)
         }
     }
 
@@ -61,13 +59,21 @@ final class NowPlaying {
     private func minimize(_ model: VideoDetailModel) {
         let enabled = UserDefaults.standard.object(forKey: "miniPlayer") as? Bool ?? true
         guard enabled, model.player.isPlaying else {
-            model.player.pause()
-            Task { await model.reportProgress() }
+            stop(model)
             return
         }
         if let current = minimized, current !== model { close() }
         model.player.isMinimized = true
         withAnimation(Motion.component) { minimized = model }
+        // 迷你条显示中：胶囊位拿着这个视频的 id，点迷你条推入它时从胶囊位展开
+        ZoomRouting.shared.slotID = ZoomID.card(model.card)
+    }
+
+    /// 不缩小：暂停、上报进度，交还胶囊位
+    private func stop(_ model: VideoDetailModel) {
+        model.player.pause()
+        ZoomRouting.shared.release(ZoomID.card(model.card))
+        Task { await model.reportProgress() }
     }
 
     /// 进入后台：上报进度；关闭了后台播放时暂停（画中画中除外）
@@ -92,6 +98,7 @@ final class NowPlaying {
 
     func close() {
         guard let model = minimized else { return }
+        ZoomRouting.shared.release(ZoomID.card(model.card))
         model.player.pause()
         Task { await model.reportProgress() }
         withAnimation(Motion.component) { minimized = nil } // 释放后播放器在 deinit 中清理
