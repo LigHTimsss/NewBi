@@ -102,8 +102,11 @@ actor BiliClient {
     }
 
     /// 原始字节（弹幕 Protobuf 等）
-    func data(_ endpoint: Endpoint) async throws -> Data {
-        let (data, response) = try await session.data(from: url(for: endpoint))
+    /// - Parameter allowsCellular: false 时这次请求不走蜂窝（离线缓存「仅 Wi-Fi」）
+    func data(_ endpoint: Endpoint, allowsCellular: Bool = true) async throws -> Data {
+        var request = URLRequest(url: try await url(for: endpoint))
+        request.allowsCellularAccess = allowsCellular
+        let (data, response) = try await session.data(for: request)
         try Self.check(response)
         return data
     }

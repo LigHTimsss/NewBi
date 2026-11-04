@@ -75,18 +75,24 @@ final class VideoStage {
     // MARK: 打开
 
     /// 点视频卡片：从卡片封面展开成视频页。已经在视频页里（相关推荐）就原地换；点的是胶囊里的视频就展开胶囊
-    func open(_ card: VideoCard, from source: VideoSource?) {
+    /// - Parameter pinsPart: 卡片上的 cid 是要播的那一 P（离线缓存列表）；否则 cid 只是默认分 P，续播记录优先
+    func open(_ card: VideoCard, from source: VideoSource?, pinsPart: Bool = false) {
+        PlayQueue.shared.claimOpen()
+        let pinned = pinsPart ? card.cid : nil
         if let model, !isMinimized {
-            if model.card.bvid != card.bvid { swap(to: card, remember: true) }
+            if model.card.bvid != card.bvid || !model.show(part: pinned) {
+                swap(to: card, pinnedCid: pinned, remember: true)
+            }
             return
         }
-        if let model, model.card.bvid == card.bvid {
+        // 胶囊里就是这个视频（指定的分 P 正在播，或能原地切过去）：展开胶囊
+        if let model, model.card.bvid == card.bvid, model.show(part: pinned) {
             expand()
             return
         }
         if model != nil { tearDown() }
 
-        let created = VideoDetailModel(card: card)
+        let created = VideoDetailModel(card: card, pinnedCid: pinned)
         // 展开途中画面归舞台（跟着容器走），铺满后交给视频页
         created.player.isMinimized = true
         Task { await created.loadIfNeeded() }
@@ -187,7 +193,9 @@ final class VideoStage {
     private func tearDown() {
         guard let model else { return }
         model.player.pause()
-        Task { await model.reportProgress() }
+        // 先同步取好进度快照再收尾：停播、释放引擎 / 代理、交出锁屏
+        model.flushProgress()
+        model.close()
         generation += 1
         isAnimating = false
         self.model = nil
@@ -204,7 +212,6 @@ final class VideoStage {
         dragKind = nil
         miniAxis = nil
         BackGesture.shared.isBlocked = false
-        // 释放后 PlayerController 在 deinit 中清理
     }
 
     // MARK: 换视频
@@ -214,12 +221,18 @@ final class VideoStage {
         swap(to: card, remember: false)
     }
 
-    private func swap(to card: VideoCard, remember: Bool) {
+    private func swap(to card: VideoCard, pinnedCid: Int? = nil, remember: Bool) {
         guard let current = model else { return }
         if remember { history.append(current.card) }
         current.player.pause()
-        Task { await current.reportProgress() }
-        let next = VideoDetailModel(card: card)
+        current.flushProgress()
+        // 画面归谁沿用旧播放器的状态：停在胶囊 / 展开途中由舞台显示，铺满时由视频页显示
+        // （胶囊里连播换到下一个时，新播放器默认交给隐藏着的页面，胶囊会只剩封面）
+        let minimized = current.player.isMinimized
+        // 立即收尾：旧视频还在路上的取流回来也不会再自动播放；淡出途中旧页面盖回封面，不闪黑
+        current.close()
+        let next = VideoDetailModel(card: card, pinnedCid: pinnedCid)
+        next.player.isMinimized = minimized
         Task { await next.loadIfNeeded() }
         // 换过视频就不再落回最初那张卡片
         source = nil
@@ -263,7 +276,20 @@ final class VideoStage {
         if commit {
             collapse()
         } else {
-            animate(Motion.component) { drag = .zero } done: { [weak self] in self?.settleExpanded() }
+            bounceBack()
+        }
+    }
+
+    /// 没拖到收起的距离：弹回铺满。和收起 / 展开不同，弹回途中页面照常接收触摸、可以被下一次拖动直接接住
+    /// （不置 isAnimating；新的拖动开始时世代加一，这次的完成回调就不再收尾）
+    private func bounceBack() {
+        generation += 1
+        let token = generation
+        withAnimation(Motion.component, completionCriteria: .logicallyComplete) {
+            drag = .zero
+        } completion: { [weak self] in
+            guard let self, generation == token else { return }
+            settleExpanded()
         }
     }
 
@@ -298,14 +324,6 @@ final class VideoStage {
     }
 
     // MARK: 其它
-
-    /// 进入后台：胶囊里的视频上报进度；关闭了后台播放时暂停（画中画中除外）
-    func enteredBackground() {
-        guard let model, isMinimized else { return }
-        Task { await model.reportProgress() }
-        let backgroundPlay = UserDefaults.standard.object(forKey: "backgroundPlay") as? Bool ?? true
-        if !backgroundPlay, !model.player.isPictureInPictureActive { model.player.pause() }
-    }
 
     private func onScreen(_ rect: CGRect) -> Bool {
         rect.width > 1 && rect.height > 1 && rect.intersects(CGRect(origin: .zero, size: canvasSize).insetBy(dx: 0, dy: 30))
@@ -753,6 +771,8 @@ struct VideoLink<Label: View>: View {
     let card: VideoCard
     /// false：不从这个按钮展开（比如「开始播放」小按钮），视频页原地淡入
     var morphs = true
+    /// true：卡片的 cid 就是要播的那一 P（离线缓存列表），不被续播记录带去别的分 P
+    var pinsPart = false
     var beforeOpen: (() -> Void)? = nil
     @ViewBuilder var label: Label
     @State private var source = VideoSource()
@@ -762,7 +782,7 @@ struct VideoLink<Label: View>: View {
         let tracks = morphs && !inStage
         Button {
             beforeOpen?()
-            VideoStage.shared.open(card, from: tracks ? source : nil)
+            VideoStage.shared.open(card, from: tracks ? source : nil, pinsPart: pinsPart)
         } label: {
             label
                 .environment(\.videoSource, tracks ? source : nil)

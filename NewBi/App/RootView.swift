@@ -122,11 +122,17 @@ struct RootView: View {
             Binding(get: { ToastCenter.shared.message }, set: { ToastCenter.shared.message = $0 }),
             bottomPadding: VideoStage.shared.showsMini ? 176 : 110
         )
-        // 回到前台查一次有没有新动态（一次轻量请求，不轮询）
+        // 回到前台查一次有没有新动态（一次轻量请求，不轮询）；红点基线按账号分开，换账号时重新查
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await DynamicBadge.shared.check() } }
+            guard phase == .active else { return }
+            Task { await DynamicBadge.shared.check(mid: session.mid) }
+            // 上次查登录态时网络不通：回到前台再确认一次
+            if session.needsRetry { Task { await session.refresh() } }
         }
-        .task { await DynamicBadge.shared.check() }
+        .task(id: session.mid) { await DynamicBadge.shared.check(mid: session.mid) }
+        .onChange(of: NetworkStatus.shared.isOnline) { _, online in
+            if online, session.needsRetry { Task { await session.refresh() } }
+        }
         // 消息未读数：启动、回到前台、登录态变化时各查一次
         .task(id: session.isLoggedIn) { await MessageBadge.shared.check(loggedIn: session.isLoggedIn) }
         .onChange(of: scenePhase) { _, phase in

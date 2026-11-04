@@ -9,6 +9,8 @@ import os
 ///
 /// 为什么不用 AVAssetResourceLoaderDelegate：HLS 的媒体分段不会走自定义 scheme，
 /// 而 CDN 要求 Referer，所以分段必须经过一个能加请求头的 http 地址。
+///
+/// 大响应（在线分段、本地文件）都分块转发：内存里只留还没发出去的几块，下游断开即停止读取 / 取消上游
 final class LocalMediaServer: @unchecked Sendable {
     enum Route: Sendable {
         case data(Data, contentType: String)
@@ -22,34 +24,46 @@ final class LocalMediaServer: @unchecked Sendable {
 
     private struct State {
         var listener: NWListener?
+        /// 已有调用方在创建 listener：其他调用只排队等结果，不再创建第二个
+        var starting = false
         var port: UInt16?
         var routes: [String: Route] = [:]
         var waiters: [CheckedContinuation<UInt16, Error>] = []
     }
 
-    private let queue = DispatchQueue(label: "newbi.local-media-server")
+    private enum StartAction {
+        case ready(UInt16)
+        case wait
+        case launch
+    }
+
+    /// listener、所有连接和上游转发的回调都在这一条串行队列上
+    private let queue: DispatchQueue
+    private let relay: UpstreamRelay
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    /// 启动（已启动则直接返回端口）
+    private init() {
+        let queue = DispatchQueue(label: "newbi.local-media-server")
+        self.queue = queue
+        relay = UpstreamRelay(queue: queue)
+    }
+
+    /// 启动（已启动则直接返回端口）。并发调用只会创建一个 listener，就绪或失败时全部返回
     func start() async throws -> UInt16 {
         if let port = state.withLock({ $0.port }) { return port }
         return try await withCheckedThrowingContinuation { continuation in
-            let needsListener = state.withLock { state -> Bool in
+            // 看状态、入队、抢启动权放在同一个临界区：不会漏掉恰好在中间到达的就绪通知，也不会启动两次
+            let action = state.withLock { state -> StartAction in
+                if let port = state.port { return .ready(port) }
                 state.waiters.append(continuation)
-                return state.listener == nil
+                if state.listener != nil || state.starting { return .wait }
+                state.starting = true
+                return .launch
             }
-            guard needsListener else { return }
-            do {
-                let parameters = NWParameters.tcp
-                parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
-                parameters.allowLocalEndpointReuse = true
-                let listener = try NWListener(using: parameters)
-                listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
-                listener.stateUpdateHandler = { [weak self] newState in self?.listenerChanged(newState, listener) }
-                state.withLock { $0.listener = listener }
-                listener.start(queue: queue)
-            } catch {
-                finishWaiters(.failure(error))
+            switch action {
+            case .ready(let port): continuation.resume(returning: port)
+            case .wait: break
+            case .launch: launchListener()
             }
         }
     }
@@ -66,22 +80,51 @@ final class LocalMediaServer: @unchecked Sendable {
 
     // MARK: - Listener
 
+    private func launchListener() {
+        do {
+            let parameters = NWParameters.tcp
+            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+            parameters.allowLocalEndpointReuse = true
+            let listener = try NWListener(using: parameters)
+            listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+            listener.stateUpdateHandler = { [weak self] newState in self?.listenerChanged(newState, listener) }
+            state.withLock {
+                $0.listener = listener
+                $0.starting = false
+            }
+            listener.start(queue: queue)
+        } catch {
+            state.withLock { $0.starting = false }
+            finishWaiters(.failure(error))
+        }
+    }
+
     private func listenerChanged(_ newState: NWListener.State, _ listener: NWListener) {
         switch newState {
         case .ready:
-            guard let port = listener.port?.rawValue else { return }
+            guard let port = listener.port?.rawValue else {
+                stop(listener, error: URLError(.cannotConnectToHost))
+                return
+            }
             state.withLock { $0.port = port }
             finishWaiters(.success(port))
-        case .failed(let error):
-            listener.cancel()
-            state.withLock {
-                $0.listener = nil
-                $0.port = nil
-            }
-            finishWaiters(.failure(error))
+        case .failed(let error), .waiting(let error):
+            // 只监听本机回环地址，waiting 不会自己好转：当作失败，下次 start() 重新创建
+            stop(listener, error: error)
         default:
             break
         }
+    }
+
+    private func stop(_ listener: NWListener, error: Error) {
+        listener.cancel()
+        state.withLock {
+            if $0.listener === listener {
+                $0.listener = nil
+                $0.port = nil
+            }
+        }
+        finishWaiters(.failure(error))
     }
 
     private func finishWaiters(_ result: Result<UInt16, Error>) {
@@ -135,10 +178,7 @@ final class LocalMediaServer: @unchecked Sendable {
         case nil:
             send(connection, status: 404)
         case .data(let data, let contentType):
-            let (status, body, contentRange) = Self.slice(data, range: range)
-            var headers = ["Content-Type": contentType, "Accept-Ranges": "bytes", "Content-Length": "\(body.count)"]
-            if let contentRange { headers["Content-Range"] = contentRange }
-            send(connection, status: status, headers: headers, body: isHead ? Data() : body)
+            serveData(data, range: range, contentType: contentType, isHead: isHead, on: connection)
         case .upstream(let source, let contentType):
             Task { await self.proxy(source, range: range, contentType: contentType, isHead: isHead, on: connection) }
         case .file(let url, let contentType):
@@ -146,96 +186,363 @@ final class LocalMediaServer: @unchecked Sendable {
         }
     }
 
-    /// 只读请求的那一段，不把整个文件读进内存
+    // MARK: - 内存数据与本地文件
+
+    private func serveData(_ data: Data, range: String?, contentType: String, isHead: Bool, on connection: NWConnection) {
+        var headers = ["Content-Type": contentType, "Accept-Ranges": "bytes"]
+        switch ByteRange(range, total: data.count) {
+        case .unsatisfiable:
+            send(connection, status: 416, headers: ["Content-Range": "bytes */\(data.count)"])
+        case .full:
+            headers["Content-Length"] = "\(data.count)"
+            send(connection, status: 200, headers: headers, body: isHead ? Data() : data)
+        case .partial(let bounds):
+            headers["Content-Range"] = "bytes \(bounds.lowerBound)-\(bounds.upperBound)/\(data.count)"
+            headers["Content-Length"] = "\(bounds.count)"
+            let body = isHead ? Data() : data.subdata(in: (data.startIndex + bounds.lowerBound)..<(data.startIndex + bounds.upperBound + 1))
+            send(connection, status: 206, headers: headers, body: body)
+        }
+    }
+
+    /// 只读请求的那一段，按块发出（不把整个文件或整段读进内存）
     private func serveFile(_ url: URL, range: String?, contentType: String, isHead: Bool, on connection: NWConnection) {
         guard let handle = try? FileHandle(forReadingFrom: url), let size = try? handle.seekToEnd(), size > 0 else {
             send(connection, status: 404)
             return
         }
-        defer { try? handle.close() }
         let total = Int(size)
-        let bounds = Self.byteRange(range, total: total)
-        var headers = ["Content-Type": contentType, "Accept-Ranges": "bytes", "Content-Length": "\(bounds.upperBound - bounds.lowerBound + 1)"]
-        let partial = range != nil
-        if partial { headers["Content-Range"] = "bytes \(bounds.lowerBound)-\(bounds.upperBound)/\(total)" }
+        var headers = ["Content-Type": contentType, "Accept-Ranges": "bytes"]
+        let status: Int
+        let bounds: ClosedRange<Int>
+        switch ByteRange(range, total: total) {
+        case .unsatisfiable:
+            try? handle.close()
+            send(connection, status: 416, headers: ["Content-Range": "bytes */\(total)"])
+            return
+        case .full:
+            status = 200
+            bounds = 0...(total - 1)
+        case .partial(let partial):
+            status = 206
+            bounds = partial
+            headers["Content-Range"] = "bytes \(partial.lowerBound)-\(partial.upperBound)/\(total)"
+        }
+        headers["Content-Length"] = "\(bounds.count)"
         guard !isHead else {
-            send(connection, status: partial ? 206 : 200, headers: headers)
+            try? handle.close()
+            send(connection, status: status, headers: headers)
             return
         }
-        try? handle.seek(toOffset: UInt64(bounds.lowerBound))
-        let body = (try? handle.read(upToCount: bounds.upperBound - bounds.lowerBound + 1)) ?? Data()
-        send(connection, status: partial ? 206 : 200, headers: headers, body: body)
+        do {
+            try handle.seek(toOffset: UInt64(bounds.lowerBound))
+        } catch {
+            try? handle.close()
+            send(connection, status: 500)
+            return
+        }
+        sendHead(connection, status: status, headers: headers)
+        FileStream(handle: handle, connection: connection, length: bounds.count).next()
     }
 
-    /// "bytes=a-b" / "bytes=a-" → 闭区间；无效或缺省时为整个文件
-    private static func byteRange(_ range: String?, total: Int) -> ClosedRange<Int> {
-        guard let range, range.hasPrefix("bytes=") else { return 0...(total - 1) }
-        let parts = range.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false)
-        guard let start = parts.first.flatMap({ Int($0) }), start < total else { return 0...(total - 1) }
-        let end = parts.count > 1 ? (Int(parts[1]) ?? total - 1) : total - 1
-        return start...min(max(end, start), total - 1)
-    }
+    // MARK: - 在线分段
 
-    private enum UpstreamResult {
-        case success(Data, HTTPURLResponse)
-        /// CDN 返回 403 / 404 / 410：B 站地址过期的典型表现
-        case expired
-        case failed
-    }
-
-    /// 整段下载后一次性返回：B 站 DASH 分段一般几 MB，实现简单且足够快。
-    /// 地址已过 deadline 时先换地址；CDN 拒绝时换地址再试一次
+    /// 地址已过 deadline 时先换地址；CDN 拒绝时换地址再试一次。接受后由 UpstreamRelay 边收边转发
     private func proxy(_ source: UpstreamSource, range: String?, contentType: String, isHead: Bool, on connection: NWConnection) async {
         if source.isExpired { _ = try? await source.refresh() }
-        var result = await fetch(source.urls, range: range, isHead: isHead)
-        if case .expired = result, (try? await source.refresh()) != nil {
-            result = await fetch(source.urls, range: range, isHead: isHead)
+        var outcome = await open(source.urls, range: range, contentType: contentType, isHead: isHead, on: connection)
+        if outcome == .expired, (try? await source.refresh()) != nil {
+            outcome = await open(source.urls, range: range, contentType: contentType, isHead: isHead, on: connection)
         }
-        guard case .success(let data, let http) = result else {
-            send(connection, status: 502)
-            return
-        }
-        var headers = ["Content-Type": contentType, "Accept-Ranges": "bytes"]
-        if let contentRange = http.value(forHTTPHeaderField: "Content-Range") { headers["Content-Range"] = contentRange }
-        headers["Content-Length"] = isHead ? (http.value(forHTTPHeaderField: "Content-Length") ?? "0") : "\(data.count)"
-        send(connection, status: http.statusCode, headers: headers, body: isHead ? Data() : data)
+        if outcome != .streaming { send(connection, status: 502) }
     }
 
-    private func fetch(_ urls: [URL], range: String?, isHead: Bool) async -> UpstreamResult {
+    private func open(_ urls: [URL], range: String?, contentType: String, isHead: Bool, on connection: NWConnection) async -> UpstreamRelay.Outcome {
         var sawRejection = false
         for url in urls {
             var request = URLRequest(url: url)
             request.httpMethod = isHead ? "HEAD" : "GET"
             if let range { request.setValue(range, forHTTPHeaderField: "Range") }
-            guard let (data, response) = try? await MediaFetch.session.data(for: request),
-                  let http = response as? HTTPURLResponse else { continue }
-            if http.statusCode < 400 { return .success(data, http) }
-            if [403, 404, 410].contains(http.statusCode) { sawRejection = true }
+            switch await relay.open(request, rangeRequested: range != nil, contentType: contentType, on: connection) {
+            case .streaming: return .streaming
+            case .expired: sawRejection = true
+            case .failed: continue
+            }
         }
         return sawRejection ? .expired : .failed
     }
 
-    private func send(_ connection: NWConnection, status: Int, headers: [String: String] = [:], body: Data = Data()) {
+    // MARK: - 发送
+
+    static func head(status: Int, headers: [String: String]) -> Data {
         var headers = headers
-        if headers["Content-Length"] == nil { headers["Content-Length"] = "\(body.count)" }
         headers["Connection"] = "close"
         let reason = HTTPURLResponse.localizedString(forStatusCode: status)
         var head = "HTTP/1.1 \(status) \(reason)\r\n"
         for (key, value) in headers { head += "\(key): \(value)\r\n" }
         head += "\r\n"
-        var payload = Data(head.utf8)
+        return Data(head.utf8)
+    }
+
+    /// 只发响应头，正文随后分块发
+    private func sendHead(_ connection: NWConnection, status: Int, headers: [String: String]) {
+        connection.send(content: Self.head(status: status, headers: headers), contentContext: .defaultMessage, isComplete: false, completion: .contentProcessed { _ in })
+    }
+
+    /// 一次发完整个响应并关闭连接
+    private func send(_ connection: NWConnection, status: Int, headers: [String: String] = [:], body: Data = Data()) {
+        var headers = headers
+        if headers["Content-Length"] == nil { headers["Content-Length"] = "\(body.count)" }
+        var payload = Self.head(status: status, headers: headers)
         payload.append(body)
         connection.send(content: payload, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
             connection.cancel()
         })
     }
+}
 
-    /// 处理 "bytes=a-b" / "bytes=a-"
-    private static func slice(_ data: Data, range: String?) -> (status: Int, body: Data, contentRange: String?) {
-        guard range != nil, !data.isEmpty else { return (200, data, nil) }
-        let bounds = byteRange(range, total: data.count)
-        let body = data.subdata(in: bounds.lowerBound..<(bounds.upperBound + 1))
-        return (206, body, "bytes \(bounds.lowerBound)-\(bounds.upperBound)/\(data.count)")
+/// 请求头里的 Range（只支持单个区间）
+enum ByteRange: Equatable {
+    /// 没有 Range、单位不是 bytes、格式不合法或多区间：按完整响应 200 处理（RFC 9110 允许忽略）
+    case full
+    /// 206：闭区间，已裁到文件范围内
+    case partial(ClosedRange<Int>)
+    /// 416：起点越过文件末尾，或后缀长度为 0
+    case unsatisfiable
+
+    init(_ header: String?, total: Int) {
+        // 空内容没有可选的区间：整份（空）返回
+        guard let header, total > 0 else {
+            self = .full
+            return
+        }
+        let spec = header.trimmingCharacters(in: .whitespaces)
+        guard spec.lowercased().hasPrefix("bytes=") else {
+            self = .full
+            return
+        }
+        let value = spec.dropFirst(6)
+        let parts = value.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard !value.contains(","), parts.count == 2 else {
+            self = .full
+            return
+        }
+        let first = parts[0].trimmingCharacters(in: .whitespaces)
+        let last = parts[1].trimmingCharacters(in: .whitespaces)
+        if first.isEmpty {
+            // 后缀：最后 N 字节（N 大于文件长度时就是整个文件）
+            guard let suffix = Int(last), suffix >= 0 else {
+                self = .full
+                return
+            }
+            self = suffix == 0 ? .unsatisfiable : .partial(max(total - suffix, 0)...(total - 1))
+            return
+        }
+        guard let start = Int(first), start >= 0 else {
+            self = .full
+            return
+        }
+        guard start < total else {
+            self = .unsatisfiable
+            return
+        }
+        guard !last.isEmpty else {
+            self = .partial(start...(total - 1))
+            return
+        }
+        guard let end = Int(last), end >= start else {
+            self = .full
+            return
+        }
+        self = .partial(start...min(end, total - 1))
+    }
+}
+
+/// 把本地文件的一段按块发给下游：上一块发完再读下一块，内存里最多一块；下游断开即停。
+/// 所有回调都在连接所在的串行队列上
+private final class FileStream: @unchecked Sendable {
+    private static let chunk = 1 << 20
+
+    private let handle: FileHandle
+    private let connection: NWConnection
+    private var remaining: Int
+
+    init(handle: FileHandle, connection: NWConnection, length: Int) {
+        self.handle = handle
+        self.connection = connection
+        remaining = length
+    }
+
+    func next() {
+        let count = min(remaining, Self.chunk)
+        guard count > 0, let data = try? handle.read(upToCount: count), !data.isEmpty else {
+            // 文件中途变短（被删除 / 截断）：直接断开，让播放器按失败处理
+            close()
+            return
+        }
+        remaining -= data.count
+        let isLast = remaining == 0
+        connection.send(content: data, contentContext: isLast ? .finalMessage : .defaultMessage, isComplete: isLast, completion: .contentProcessed { error in
+            if error != nil || isLast {
+                self.close()
+            } else {
+                self.next()
+            }
+        })
+    }
+
+    private func close() {
+        try? handle.close()
+        connection.cancel()
+    }
+}
+
+/// 在线分段的上游转发：收到一块转发一块，不先把整段攒在内存里。
+/// - 看到第一块数据（或请求结束）时检查响应：请求了区间却回 200（CDN 忽略 Range、正文是整份文件）立刻取消，
+///   读进来的最多是第一块；403 / 404 / 410 报告地址过期，由上层换地址
+/// - 下游积压超过 highWater 暂停上游，降到 lowWater 再继续
+/// - 下游断开（发送失败 / 连接取消）时取消上游
+final class UpstreamRelay: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    enum Outcome: Sendable {
+        /// 已接受，响应头已发给下游，后续自动转发到结束
+        case streaming
+        case expired
+        case failed
+    }
+
+    private static let highWater = 4 << 20
+    private static let lowWater = 1 << 20
+
+    /// 每个上游请求的状态；只在 queue 上读写（登记发生在 resume 之前）
+    private final class Relay: @unchecked Sendable {
+        let connection: NWConnection
+        let contentType: String
+        let rangeRequested: Bool
+        let task: URLSessionDataTask
+        var continuation: CheckedContinuation<Outcome, Never>?
+        var streaming = false
+        var pending = 0
+        var paused = false
+
+        init(connection: NWConnection, contentType: String, rangeRequested: Bool, task: URLSessionDataTask, continuation: CheckedContinuation<Outcome, Never>) {
+            self.connection = connection
+            self.contentType = contentType
+            self.rangeRequested = rangeRequested
+            self.task = task
+            self.continuation = continuation
+        }
+
+        func decide(_ outcome: Outcome) {
+            continuation?.resume(returning: outcome)
+            continuation = nil
+        }
+    }
+
+    private var session: URLSession!
+    private let relays = OSAllocatedUnfairLock(initialState: [Int: Relay]())
+
+    /// - Parameter queue: 和下游连接同一条串行队列，转发状态不用另外加锁
+    init(queue: DispatchQueue) {
+        super.init()
+        let config = URLSessionConfiguration.default
+        config.httpAdditionalHeaders = BiliClient.mediaHeaders
+        config.timeoutIntervalForRequest = 15
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil // 媒体数据不进 URLCache，避免占用磁盘
+        let delegateQueue = OperationQueue()
+        delegateQueue.underlyingQueue = queue
+        delegateQueue.maxConcurrentOperationCount = 1
+        session = URLSession(configuration: config, delegate: self, delegateQueue: delegateQueue)
+    }
+
+    func open(_ request: URLRequest, rangeRequested: Bool, contentType: String, on connection: NWConnection) async -> Outcome {
+        await withCheckedContinuation { continuation in
+            let task = session.dataTask(with: request)
+            let relay = Relay(connection: connection, contentType: contentType, rangeRequested: rangeRequested, task: task, continuation: continuation)
+            relays.withLock { $0[task.taskIdentifier] = relay }
+            task.resume()
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard let relay = relays.withLock({ $0[dataTask.taskIdentifier] }) else { return }
+        if !relay.streaming, !begin(relay, response: dataTask.response) {
+            dataTask.cancel()
+            return
+        }
+        forward(data, relay)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        guard let relay = relays.withLock({ $0.removeValue(forKey: task.taskIdentifier) }) else { return }
+        if relay.streaming {
+            // 正文中途断了：直接断开下游，播放器按失败走恢复链
+            error == nil ? finish(relay) : relay.connection.cancel()
+        } else if error == nil, begin(relay, response: task.response) {
+            // HEAD 或空正文
+            finish(relay)
+        } else {
+            relay.decide(.failed) // 已经判过（过期 / 拒绝）时不会重复
+        }
+    }
+
+    /// 检查响应头；接受时把响应头发给下游
+    private func begin(_ relay: Relay, response: URLResponse?) -> Bool {
+        guard let http = response as? HTTPURLResponse else {
+            relay.decide(.failed)
+            return false
+        }
+        let status = http.statusCode
+        if [403, 404, 410].contains(status) {
+            relay.decide(.expired)
+            return false
+        }
+        guard (200..<300).contains(status), !relay.rangeRequested || status == 206 else {
+            relay.decide(.failed)
+            return false
+        }
+        var headers = ["Content-Type": relay.contentType, "Accept-Ranges": "bytes"]
+        if let contentRange = http.value(forHTTPHeaderField: "Content-Range") { headers["Content-Range"] = contentRange }
+        // 上游压缩过时 URLSession 已解压，原长度对不上：不写长度，由关闭连接界定正文
+        if http.value(forHTTPHeaderField: "Content-Encoding") == nil, let length = http.value(forHTTPHeaderField: "Content-Length") {
+            headers["Content-Length"] = length
+        }
+        relay.streaming = true
+        relay.decide(.streaming)
+        let task = relay.task
+        relay.connection.stateUpdateHandler = { state in
+            switch state {
+            case .failed, .cancelled: task.cancel()
+            default: break
+            }
+        }
+        relay.connection.send(content: LocalMediaServer.head(status: status, headers: headers), contentContext: .defaultMessage, isComplete: false, completion: .contentProcessed { _ in })
+        return true
+    }
+
+    private func forward(_ data: Data, _ relay: Relay) {
+        let count = data.count
+        relay.pending += count
+        relay.connection.send(content: data, contentContext: .defaultMessage, isComplete: false, completion: .contentProcessed { error in
+            relay.pending -= count
+            if error != nil {
+                relay.task.cancel()
+                relay.connection.cancel()
+            } else if relay.paused, relay.pending < Self.lowWater {
+                relay.paused = false
+                relay.task.resume()
+            }
+        })
+        if !relay.paused, relay.pending > Self.highWater {
+            relay.paused = true
+            relay.task.suspend()
+        }
+    }
+
+    private func finish(_ relay: Relay) {
+        let connection = relay.connection
+        connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
     }
 }
 
@@ -320,15 +627,32 @@ enum MediaFetch {
         return URLSession(configuration: config)
     }()
 
+    /// 读一小段（索引头）。只接受 206：CDN 忽略 Range 回 200 时正文是整份文件，读正文之前就放弃；
+    /// 上游多给也最多读到区间长度
     static func range(_ urls: [URL], _ range: ClosedRange<Int>) async throws -> Data {
         var lastError: Error = BiliError.emptyData
+        let expected = range.count
         for url in urls {
             var request = URLRequest(url: url)
             request.setValue("bytes=\(range.lowerBound)-\(range.upperBound)", forHTTPHeaderField: "Range")
             do {
-                let (data, response) = try await session.data(for: request)
-                if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) { return data }
-                lastError = BiliError.http((response as? HTTPURLResponse)?.statusCode ?? -1)
+                let (bytes, response) = try await session.bytes(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+                // 文件本身比区间还短时 CDN 可能回 200 + 整个（很小的）文件，这种可以接受
+                let wholeSmallFile = status == 200 && range.lowerBound == 0 && (0...Int64(expected)).contains(response.expectedContentLength)
+                guard status == 206 || wholeSmallFile else {
+                    bytes.task.cancel()
+                    lastError = BiliError.http(status)
+                    continue
+                }
+                var data = Data()
+                data.reserveCapacity(expected)
+                for try await byte in bytes {
+                    data.append(byte)
+                    if data.count >= expected { break }
+                }
+                bytes.task.cancel()
+                return data
             } catch {
                 lastError = error
             }

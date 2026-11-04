@@ -27,47 +27,92 @@ final class VideoDetailModel {
     private(set) var partIndex = 0
     /// 「已定位到上次观看位置」提示
     var resumeHint: String?
+    /// 连播队列里播完后弹出的「即将播放」。放在模型里而不是视图 @State：
+    /// 播放器的 onEnded 回调只弱引用模型，不捕获视图（捕获视图会连带强引用模型，形成循环引用）
+    var upNext: VideoCard?
 
     var pages: [VideoPage] { detail?.pages ?? [] }
     var currentPart: VideoPage? { pages.indices.contains(partIndex) ? pages[partIndex] : nil }
     var currentCid: Int? { currentPart?.cid ?? detail?.cid }
     var maxCoins: Int { 2 }
 
-    @ObservationIgnored private var loadStarted = false
+    /// 从离线缓存列表点开的那一 P（同一个 BV 可能缓存了好几个分 P）：优先播它，不被续播记录带去别的分 P
+    let pinnedCid: Int?
 
-    init(card: VideoCard) {
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+
+    init(card: VideoCard, pinnedCid: Int? = nil) {
         self.card = card
+        self.pinnedCid = pinnedCid
         comments = CommentModel(oid: card.id)
     }
 
-    /// 舞台打开视频时就开始取流（和展开动画同时进行），页面出现时不再重复
+    /// 详情拿不到、也没有离线缓存时，播放区里的「重试」
+    func retry() {
+        guard !player.isClosed else { return }
+        error = nil
+        loadTask?.cancel()
+        loadTask = Task { await self.load() }
+    }
+
+    /// 舞台打开视频时就开始取流（和展开动画同时进行），页面出现时不再重复。
+    /// 加载放在模型自己持有的任务里：页面的 .task 被取消（收起成胶囊）不会打断加载，关掉时由 close() 取消
     func loadIfNeeded() async {
-        guard !loadStarted else { return }
-        loadStarted = true
-        await load()
+        if loadTask == nil, !player.isClosed {
+            loadTask = Task { await self.load() }
+        }
+        await loadTask?.value
+    }
+
+    /// 舞台关掉或换走这个视频时调用：取消还在路上的请求，播放器立即收尾（不等 deinit）
+    func close() {
+        loadTask?.cancel()
+        upNext = nil
+        player.shutdown()
     }
 
     func load() async {
         async let relatedTask = try? BiliClient.shared.get(.related(bvid: card.bvid), as: [VideoCard].self)
+        // 离线缓存里点开的那一 P：不等详情，立刻播本地文件（没网时也一样）
+        var pinnedLocal: DownloadRecord?
+        if let pinnedCid, player.playingCid == nil,
+           let record = DownloadManager.shared.completed(bvid: card.bvid, cid: pinnedCid) {
+            pinnedLocal = record
+            offline = record
+            await player.load(bvid: record.bvid, cid: record.cid)
+            player.setNowPlaying(title: record.title, artist: record.ownerName ?? "离线缓存", cover: record.cover)
+        }
         do {
             let detail = try await BiliClient.shared.get(.view(bvid: card.bvid), as: VideoDetail.self)
+            // 等详情期间已关掉：不再装流、不再接管锁屏
+            guard !Task.isCancelled, !player.isClosed else { return }
             self.detail = detail
             if card.id == 0 { comments = CommentModel(oid: detail.aid) }
             let relation = RelationModel(mid: detail.owner.mid)
             self.relation = relation
 
-            // 登录后从上次看到的位置续播（跨设备同步）；多 P 时直接回到上次看的那一 P
+            // 登录后从上次看到的位置续播（跨设备同步）；多 P 时直接回到上次看的那一 P（指定了分 P 时以指定的为准）
             let loggedIn = BiliClient.csrfToken != nil
             let resume = loggedIn ? await resumePosition(detail) : nil
-            if let cid = resume?.cid ?? card.cid, let index = pages.firstIndex(where: { $0.cid == cid }) {
+            guard !Task.isCancelled, !player.isClosed else { return }
+            if let cid = pinnedCid ?? resume?.cid ?? card.cid, let index = pages.firstIndex(where: { $0.cid == cid }) {
                 partIndex = index
             }
             configureParts()
-            await player.load(bvid: detail.bvid, cid: currentCid ?? detail.cid, startAt: resume?.seconds)
+            let cid = pinnedLocal?.cid ?? currentCid ?? detail.cid
+            // 续播位置只用在它所属的那一 P 上
+            let startAt = resume.flatMap { $0.cid == cid ? $0.seconds : nil }
+            var resumed = startAt != nil
+            if pinnedLocal != nil {
+                // 本地文件已经在播：还没看多少时才跳到上次位置，不打断已经在看的
+                if let startAt, player.currentTime < 5 { player.seek(seconds: startAt) } else { resumed = false }
+            } else {
+                await player.load(bvid: detail.bvid, cid: cid, startAt: startAt)
+            }
             updateNowPlaying()
-            if let resume {
+            if resumed, let startAt {
                 let part = pages.count > 1 ? "P\(partIndex + 1) " : ""
-                resumeHint = "已定位到上次观看位置 \(part)\(Int(resume.seconds).durationText)"
+                resumeHint = "已定位到上次观看位置 \(part)\(Int(startAt).durationText)"
             }
 
             await relation.refresh()
@@ -82,8 +127,12 @@ final class VideoDetailModel {
             }
             onlineText = try? await BiliClient.shared.get(.onlineTotal(bvid: detail.bvid, cid: currentCid ?? detail.cid), as: OnlineTotal.self).total
         } catch {
-            // 没网但已缓存：直接播本地文件
-            if let record = DownloadManager.shared.completed(bvid: card.bvid, cid: card.cid ?? 0)
+            // 已关掉（请求被取消）：不再回退到离线播放
+            guard !Task.isCancelled, !player.isClosed else { return }
+            // 没网但已缓存：直接播本地文件（指定的那一 P 已经在播就不动）
+            if pinnedLocal != nil {
+                // 简介区显示离线信息
+            } else if let record = DownloadManager.shared.completed(bvid: card.bvid, cid: card.cid ?? 0)
                 ?? DownloadManager.shared.record(bvid: card.bvid).flatMap({ $0.state == .completed ? $0 : nil }) {
                 offline = record
                 await player.load(bvid: record.bvid, cid: record.cid)
@@ -108,12 +157,23 @@ final class VideoDetailModel {
 
     /// 切换分 P：同一个播放器换流，弹幕跟着换；评论、简介不变（同一个 aid）
     func selectPart(_ index: Int) async {
-        guard let detail, pages.indices.contains(index), index != partIndex else { return }
-        await reportProgress()
+        guard let detail, pages.indices.contains(index), index != partIndex, !player.isClosed else { return }
+        // 先同步记下旧一 P 的进度，再换流
+        flushProgress()
         partIndex = index
         configureParts()
         await player.load(bvid: detail.bvid, cid: pages[index].cid)
         updateNowPlaying()
+    }
+
+    /// 舞台上已经是这个视频、又从离线缓存点了它的某一 P：能就地展示就返回 true
+    /// （没指定分 P、正在播的就是它、或者能原地切过去）；否则返回 false，由舞台换一个新的播放器
+    func show(part cid: Int?) -> Bool {
+        guard let cid, !player.isClosed else { return !player.isClosed }
+        if cid == (player.playingCid ?? pinnedCid ?? currentCid) { return true }
+        guard let index = pages.firstIndex(where: { $0.cid == cid }) else { return false }
+        Task { await selectPart(index) }
+        return true
     }
 
     private func configureParts() {
@@ -183,14 +243,21 @@ final class VideoDetailModel {
         likeDelta += value ? 1 : -1
     }
 
-    /// 上报播放进度，让历史记录和其它设备的续播保持同步（离开页面、进入后台、切分 P 时调用）
-    func reportProgress() async {
-        guard let detail, let cid = currentCid, let csrf = BiliClient.csrfToken, player.currentTime > 0 else { return }
-        let finished = player.duration > 0 && player.currentTime >= player.duration - 5
-        try? await BiliClient.shared.post(.historyReport, form: [
-            "aid": "\(detail.aid)", "cid": "\(cid)",
-            "progress": finished ? "-1" : "\(Int(player.currentTime))", "csrf": csrf,
-        ])
+    /// 上报播放进度，让历史记录和其它设备的续播保持同步（离开页面、进入后台、切分 P、关掉 / 换走时调用）。
+    /// 调用时同步取快照：引擎里实际装着的那一项的 CID 和它的时钟（两者同时提交，不会把上一 P 的进度记到新 CID 上）；
+    /// 网络请求在后台发，调用方紧接着切 P、关掉播放器都不影响已经取好的快照
+    func flushProgress() {
+        let aid = detail?.aid ?? offline?.aid ?? card.id
+        guard aid > 0, let cid = player.playingCid, let csrf = BiliClient.csrfToken else { return }
+        let time = player.currentTime
+        let duration = player.duration
+        guard time > 0 else { return }
+        let finished = duration > 0 && time >= duration - 5
+        let form = [
+            "aid": "\(aid)", "cid": "\(cid)",
+            "progress": finished ? "-1" : "\(Int(time))", "csrf": csrf,
+        ]
+        Task { try? await BiliClient.shared.post(.historyReport, form: form) }
     }
 }
 
@@ -201,7 +268,6 @@ struct VideoDetailView: View {
     let model: VideoDetailModel
     /// 连播队列：播完后换到下一个视频（舞台原地替换）
     var onAdvance: ((VideoCard) -> Void)? = nil
-    @State private var upNext: VideoCard?
     @State private var tab = 0
     /// 简介 → 评论的横滑进度 0…1，Tab 下划线跟手
     @State private var pageProgress: CGFloat = 0
@@ -210,6 +276,12 @@ struct VideoDetailView: View {
     /// 在画面上下拉收起：只认从画面里（进度条以上）开始的竖向拖动
     @State private var pulling: Bool?
     @State private var playerBox = FrameBox()
+    /// 「点我发弹幕」的输入框
+    @State private var composing = false
+    @State private var draft = ""
+    /// 全屏里点收藏：收藏夹面板挂在这一层（简介区在全屏时是收起的）
+    @State private var showFavorite = false
+    @Environment(SessionStore.self) private var session
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var parentOpenURL
     @AppStorage("backgroundPlay") private var backgroundPlay = true
@@ -225,7 +297,8 @@ struct VideoDetailView: View {
                     DetailTabs(
                         selection: tab,
                         progress: pageProgress,
-                        replyCount: model.comments.total ?? model.detail?.stat.reply
+                        replyCount: model.comments.total ?? model.detail?.stat.reply,
+                        onCompose: startComposing
                     ) { index in
                         withAnimation(Motion.component) { tab = index }
                     }
@@ -246,7 +319,7 @@ struct VideoDetailView: View {
             await model.loadIfNeeded()
         }
         .onAppear { UIDevice.current.beginGeneratingDeviceOrientationNotifications() }
-        // 收起后模型由舞台持有（迷你胶囊）或随之释放，PlayerController 在 deinit 中清理
+        // 收起后模型由舞台持有（迷你胶囊）；关掉 / 换走时舞台调用 model.close() 显式收尾
         .onDisappear {
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
             if isFullscreen {
@@ -255,6 +328,21 @@ struct VideoDetailView: View {
             }
         }
         .toast(Binding(get: { model.resumeHint }, set: { model.resumeHint = $0 }), bottomPadding: 40)
+        .alert("发弹幕", isPresented: $composing) {
+            TextField("发一条友善的弹幕", text: $draft)
+            Button("发送", action: sendDraft)
+            Button("取消", role: .cancel) { draft = "" }
+        } message: {
+            Text("弹幕会出现在当前播放位置")
+        }
+        .sheet(isPresented: $showFavorite) {
+            if let detail = model.detail, let mid = session.user?.mid {
+                FavoriteSheet(aid: detail.aid, mid: mid) { favoured in
+                    model.setFavoured(favoured)
+                    model.resumeHint = favoured ? "已收藏" : "已取消收藏"
+                }
+            }
+        }
         // 评论里的时间点：跳到该位置并继续播放；其它链接交回上层
         .environment(\.openURL, OpenURLAction { url in
             if case .seek(let seconds) = AppLink.parse(url) {
@@ -272,7 +360,7 @@ struct VideoDetailView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .background else { return }
-            Task { await model.reportProgress() }
+            model.flushProgress()
             guard !backgroundPlay, !model.player.isPictureInPictureActive else { return }
             model.player.pause()
         }
@@ -290,7 +378,17 @@ struct VideoDetailView: View {
                     .animation(Motion.micro, value: model.player.hasFrame)
                     .allowsHitTesting(false)
                 if isFullscreen {
-                    FullscreenOverlay(model: model, locked: $locked, onExit: { setFullscreen(false) })
+                    FullscreenOverlay(
+                        model: model,
+                        locked: $locked,
+                        onExit: { setFullscreen(false) },
+                        // 评论：退出全屏、切到评论 Tab
+                        onComments: {
+                            setFullscreen(false)
+                            withAnimation(Motion.component) { tab = 1 }
+                        },
+                        onFavorite: requestFavorite
+                    )
                 } else {
                     CompactOverlay(
                         controller: model.player,
@@ -299,17 +397,19 @@ struct VideoDetailView: View {
                         onFullscreen: { setFullscreen(true) }
                     )
                 }
+                // 在控件之上、只占中间一块：返回 / 全屏等按钮照常能点
+                PlayerStatusView(model: model)
             } else {
                 Color.clear
             }
         }
         .overlay(alignment: .bottom) {
-            if let next = upNext {
+            if let next = model.upNext {
                 UpNextCard(next: next, queueTitle: PlayQueue.shared.title) {
-                    upNext = nil
+                    model.upNext = nil
                     onAdvance?(next)
                 } onCancel: {
-                    withAnimation(Motion.component) { upNext = nil }
+                    withAnimation(Motion.component) { model.upNext = nil }
                 }
                 .frame(maxWidth: 460)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -342,11 +442,49 @@ struct VideoDetailView: View {
     /// 在连播队列里时：播完弹出「即将播放」，3 秒后换到下一个
     private func configureQueue() {
         guard onAdvance != nil else { return }
+        let model = self.model
         let bvid = model.card.bvid
-        model.player.onEnded = {
-            guard let next = PlayQueue.shared.next(after: bvid) else { return }
-            withAnimation(Motion.component) { upNext = next }
+        // 只弱引用模型、不捕获视图（self）：否则 模型 → 播放器 → 回调 → 视图 → 模型 成环，关掉视频后永不释放
+        model.player.onEnded = { [weak model] in
+            guard let model, let next = PlayQueue.shared.next(after: bvid) else { return }
+            withAnimation(Motion.component) { model.upNext = next }
         }
+    }
+
+    private func startComposing() {
+        guard session.isLoggedIn else {
+            model.resumeHint = "登录后才能发送弹幕"
+            return
+        }
+        guard model.player.playingCid != nil else {
+            model.resumeHint = "视频开始播放后才能发弹幕"
+            return
+        }
+        composing = true
+    }
+
+    private func sendDraft() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = ""
+        guard !text.isEmpty else { return }
+        let model = model
+        Task {
+            do {
+                try await model.player.sendDanmaku(text)
+                model.resumeHint = "发送成功"
+            } catch {
+                model.resumeHint = error.localizedDescription
+            }
+        }
+    }
+
+    private func requestFavorite() {
+        guard session.isLoggedIn else {
+            model.resumeHint = "登录后才能收藏"
+            return
+        }
+        guard model.detail != nil else { return }
+        showFavorite = true
     }
 
     private func setFullscreen(_ on: Bool, preferred: UIInterfaceOrientationMask = .landscapeRight) {
@@ -372,6 +510,65 @@ struct VideoDetailView: View {
     }
 }
 
+// MARK: - 播放区状态提示
+
+/// 播放区中间的提示：移动网络确认、取流失败、详情拿不到。都带一个能直接解决问题的按钮
+private struct PlayerStatusView: View {
+    let model: VideoDetailModel
+
+    private struct Status: Equatable {
+        let text: String
+        let action: String
+        let kind: Kind
+        enum Kind { case cellular, stream, detail }
+    }
+
+    private var status: Status? {
+        let player = model.player
+        if player.needsCellularConfirm {
+            return Status(text: "正在使用移动网络，播放将消耗流量", action: "继续播放", kind: .cellular)
+        }
+        if let error = player.error {
+            return Status(text: error, action: "重试", kind: .stream)
+        }
+        if let error = model.error, model.detail == nil, model.offline == nil {
+            return Status(text: error, action: "重试", kind: .detail)
+        }
+        return nil
+    }
+
+    var body: some View {
+        let status = status
+        ZStack {
+            if let status {
+                // 盖在封面上压暗，文字才看得清；本身不接收触摸
+                Color.black.opacity(0.5).allowsHitTesting(false)
+                VStack(spacing: 12) {
+                    Text(status.text)
+                        .font(.footnote)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                    Button(status.action) { perform(status.kind) }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                }
+                .foregroundStyle(.white)
+                .padding(16)
+                .frame(maxWidth: 300)
+            }
+        }
+        .animation(Motion.micro, value: status)
+    }
+
+    private func perform(_ kind: Status.Kind) {
+        switch kind {
+        case .cellular: model.player.confirmCellular()
+        case .stream: model.player.retry()
+        case .detail: model.retry()
+        }
+    }
+}
+
 // MARK: - 竖屏小窗控件
 
 private struct CompactOverlay: View {
@@ -381,6 +578,7 @@ private struct CompactOverlay: View {
     var onFullscreen: () -> Void
     @State private var showControls = true
     @State private var hideTask: Task<Void, Never>?
+    @Environment(\.accent) private var accent
 
     var body: some View {
         ZStack {
@@ -405,7 +603,11 @@ private struct CompactOverlay: View {
                 HStack(spacing: 8) {
                     GlassCircleButton(systemImage: "chevron.left", label: "返回", size: 36, glass: .clear, action: onBack)
                     Spacer()
-                    GlassCircleButton(systemImage: "tv", label: "投屏", size: 36, glass: .clear)
+                    // 系统投屏 / 音频输出选择（和全屏抽屉里的是同一个）
+                    RoutePicker(activeTint: UIColor(accent))
+                        .frame(width: 36, height: 36)
+                        .glassEffect(.clear.interactive(), in: .circle)
+                        .accessibilityLabel("投屏")
                     moreMenu
                 }
             }
@@ -575,6 +777,7 @@ private struct DetailTabs: View {
     var selection: Int
     var progress: CGFloat
     var replyCount: Int?
+    var onCompose: () -> Void
     var onSelect: (Int) -> Void
     /// 两个标签下划线槽位的中心（在本视图坐标系中）
     @State private var slots: [Int: CGPoint] = [:]
@@ -586,7 +789,7 @@ private struct DetailTabs: View {
             tab("简介", index: 0)
             tab("评论", index: 1, badge: replyCount?.biliCount)
             Spacer()
-            Button {} label: {
+            Button(action: onCompose) {
                 HStack(spacing: 6) {
                     Text("点我发弹幕").foregroundStyle(Theme.secondaryText)
                     Text("弹")

@@ -57,6 +57,8 @@ targets:
         CFBundleDisplayName: NewBi
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
+        # ProMotion：不加这个键，iPhone 上 Core Animation / SwiftUI 动画最高只跑 60 Hz
+        CADisableMinimumFrameDurationOnPhone: true
         # DASH 转 HLS 的本地代理跑在 127.0.0.1，需要放行本地明文 HTTP
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

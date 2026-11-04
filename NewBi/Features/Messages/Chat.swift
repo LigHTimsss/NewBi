@@ -17,6 +17,8 @@ final class ChatModel {
     private(set) var isLoading = false
     private(set) var error: String?
     private var loadingOlder = false
+    /// 已经处理过的最大 seqno（含不显示的撤回等指令）：下一次增量从这里取，只有指令的一页也会推进
+    @ObservationIgnored private var cursor = 0
 
     init(peer: ChatPeer) {
         self.peer = peer
@@ -38,6 +40,7 @@ final class ChatModel {
         do {
             let page = try await BiliClient.shared.get(.chatMessages(talkerID: peer.id, sessionType: peer.sessionType), as: ChatMessagePage.self)
             messages = Self.visible(page.messages)
+            cursor = max(cursor, Self.newest(page.messages))
             hasMore = page.hasMore == 1
             error = nil
         } catch BiliError.emptyData {
@@ -62,24 +65,38 @@ final class ChatModel {
 
     /// 取比最新一条更新的消息（页面打开时每隔几秒一次）
     func poll() async {
-        guard let last = messages.last else {
+        let begin = max(cursor, messages.last?.seqno ?? 0)
+        guard begin > 0 else {
             await load()
             return
         }
         guard let page = try? await BiliClient.shared.get(
-            .chatMessages(talkerID: peer.id, sessionType: peer.sessionType, begin: last.seqno), as: ChatMessagePage.self
+            .chatMessages(talkerID: peer.id, sessionType: peer.sessionType, begin: begin), as: ChatMessagePage.self
         ) else { return }
+        let newest = Self.newest(page.messages)
+        guard newest > cursor else { return }
+        cursor = newest
+        // 先消费指令：撤回改写原消息（原消息变成一行「撤回了一条消息」），指令本身不显示
+        let recalled = Set((page.messages ?? []).compactMap(\.recalledKey))
         let known = Set(messages.map(\.seqno))
         let fresh = Self.visible(page.messages).filter { !known.contains($0.seqno) }
-        guard !fresh.isEmpty else { return }
-        withAnimation(Motion.component) { messages += fresh }
+        let hits = messages.indices.filter { index in
+            messages[index].msgKey.map { recalled.contains($0) } == true && !messages[index].isRecalled
+        }
+        if !fresh.isEmpty || !hits.isEmpty {
+            withAnimation(Motion.component) {
+                for index in hits { messages[index].msgStatus = 1 }
+                messages += fresh
+            }
+        }
         await markRead()
     }
 
     func markRead() async {
-        guard let last = messages.last, let csrf = BiliClient.csrfToken else { return }
+        let seqno = max(cursor, messages.last?.seqno ?? 0)
+        guard seqno > 0, let csrf = BiliClient.csrfToken else { return }
         try? await BiliClient.shared.post(.chatAck, form: [
-            "talker_id": "\(peer.id)", "session_type": "\(peer.sessionType)", "ack_seqno": "\(last.seqno)",
+            "talker_id": "\(peer.id)", "session_type": "\(peer.sessionType)", "ack_seqno": "\(seqno)",
             "csrf": csrf, "csrf_token": csrf, "build": "0", "mobi_app": "web",
         ])
     }
@@ -115,8 +132,23 @@ final class ChatModel {
         withAnimation(Motion.component) { pending.removeAll { $0.id == item.id } }
     }
 
+    /// 要显示的消息（按 seqno 正序）：撤回指令不显示，但同一页里被它撤回的那条标成已撤回
     private static func visible(_ list: [ChatMessage]?) -> [ChatMessage] {
-        (list ?? []).filter { !$0.isRecallCommand }.sorted { $0.seqno < $1.seqno }
+        let list = list ?? []
+        let recalled = Set(list.compactMap(\.recalledKey))
+        return list
+            .filter { !$0.isRecallCommand }
+            .map { message in
+                guard let key = message.msgKey, recalled.contains(key), !message.isRecalled else { return message }
+                var copy = message
+                copy.msgStatus = 1
+                return copy
+            }
+            .sorted { $0.seqno < $1.seqno }
+    }
+
+    private static func newest(_ list: [ChatMessage]?) -> Int {
+        list?.map(\.seqno).max() ?? 0
     }
 }
 

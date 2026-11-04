@@ -35,7 +35,7 @@ final class PlayerController {
     let danmaku = DanmakuEngine()
 
     private(set) var isPlaying = false
-    /// 已经出过画面（第一次 ready）：之前播放区盖着封面
+    /// 当前这一项的第一帧已经可以显示（引擎的 firstFrame）：之前播放区盖着封面。换视频 / 换 P 时重置
     private(set) var hasFrame = false
     private(set) var currentTime: Double = 0
     private(set) var bufferedTime: Double = 0
@@ -65,6 +65,38 @@ final class PlayerController {
     @ObservationIgnored var onRequestPart: ((Int) -> Void)?
     /// 整个视频播完（没有下一 P 可连播时）：连播队列用
     @ObservationIgnored var onEnded: (() -> Void)?
+
+    /// 播放方式：播完之后做什么
+    enum EndAction: String, CaseIterable, Hashable {
+        /// 自动连播：下一 P / 连播队列（遵循设置里的「自动连播分 P」）
+        case next
+        /// 单集循环
+        case loop
+        /// 播完暂停
+        case stop
+
+        var title: String {
+            switch self {
+            case .next: "自动连播"
+            case .loop: "单集循环"
+            case .stop: "播完暂停"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .next: "arrow.forward.to.line"
+            case .loop: "repeat.1"
+            case .stop: "pause.circle"
+            }
+        }
+    }
+
+    /// 本次启动内沿用上次选的播放方式（换视频不重置；不持久化，免得下次打开莫名一直循环）
+    private static var lastEndAction: EndAction = .next
+    var endAction: EndAction {
+        didSet { Self.lastEndAction = endAction }
+    }
 
     /// 实际播放速度（含长按临时倍速）
     var effectiveRate: Float { isBoosting ? boostRate : rate }
@@ -105,6 +137,15 @@ final class PlayerController {
     @ObservationIgnored private var lastSameStageRetry: Date?
     @ObservationIgnored private var clock: Task<Void, Never>?
     @ObservationIgnored private var sleepTask: Task<Void, Never>?
+    /// shutdown() 之后为 true：还在路上的取流 / 详情请求回来时不再加载、不再自动播放、不再接管锁屏
+    @ObservationIgnored private(set) var isClosed = false
+    /// 播放世代：换 P、换画质、失败恢复、重试各加一；取流回来时世代不符就丢弃
+    @ObservationIgnored private var generation = 0
+    /// 引擎里实际装着的那一项对应的 CID（和 currentTime 同时提交）。切 P 时新流装上之前仍是旧 CID
+    @ObservationIgnored private(set) var playingCid: Int?
+    /// 等待用户确认移动网络播放（设置 → 移动网络播放提醒）
+    private(set) var needsCellularConfirm = false
+    @ObservationIgnored private var pendingStart: Double?
 
     /// 设置 → 播放引擎：auto 自动 · system 仅系统 · ffmpeg 始终 FFmpeg
     private static var enginePreference: String {
@@ -118,6 +159,7 @@ final class PlayerController {
     }
 
     init() {
+        endAction = Self.lastEndAction
         danmakuSettings = DanmakuSettings.load()
         engine = AVPlayerEngine()
         danmaku.settings = danmakuSettings
@@ -132,16 +174,41 @@ final class PlayerController {
         }
     }
 
-    /// Swift 6.2 isolated deinit：详情页出栈、模型释放时在主线程清理
+    /// 兜底：正常情况下舞台关掉 / 换走视频时已经调过 shutdown()。
+    /// 这里不写被观察的属性（析构中触发观察通知不安全），只做必须的释放
     isolated deinit {
+        guard !isClosed else { return }
         clock?.cancel()
         sleepTask?.cancel()
         engine.teardown()
         RemoteControl.shared.deactivate(ObjectIdentifier(self))
     }
 
+    /// 舞台关掉或换走这个视频时显式收尾：停播、释放引擎和本地代理路由、交出锁屏控制、断开回调。
+    /// 不依赖 deinit —— 还在路上的网络请求、动画闭包都可能让对象多活一会儿，期间不能再出声或抢锁屏。
+    /// 不清 currentTime / duration：收尾后还要用它们上报观看进度。可重复调用
+    func shutdown() {
+        guard !isClosed else { return }
+        isClosed = true
+        clock?.cancel()
+        clock = nil
+        sleepTask?.cancel()
+        sleepTask = nil
+        onEnded = nil
+        onRequestPart = nil
+        engine.teardown()
+        hls = nil
+        danmaku.clear()
+        isBoosting = false
+        isPlaying = false
+        // 画面已释放：页面淡出途中盖回封面，不露黑底
+        hasFrame = false
+        RemoteControl.shared.deactivate(ObjectIdentifier(self))
+    }
+
     /// 锁屏 / 控制中心显示的标题、UP 主、封面
     func setNowPlaying(title: String, artist: String, cover: String) {
+        guard !isClosed else { return }
         RemoteControl.shared.activate(self, metadata: .init(title: title, artist: artist, cover: cover))
     }
 
@@ -152,70 +219,159 @@ final class PlayerController {
 
     // MARK: 加载
 
+    /// 设置里的「移动网络播放提醒」：本次启动内确认过一次就不再问
+    private static var cellularConfirmed = false
+
+    private static var initialStage: Stage {
+        enginePreference == "ffmpeg" && EngineFactory.ffmpegAvailable ? .ffmpegDash : .systemDash
+    }
+
+    /// 换视频 / 换分 P：新的播放世代，之前所有还在路上的取流结果作废（连续切 P 时不会被旧请求覆盖）
     /// - Parameter startAt: 续播位置（秒），来自历史记录
     func load(bvid: String, cid: Int, startAt: Double? = nil) async {
+        guard !isClosed else { return }
+        generation += 1
+        if source != nil { engine.pause() } // 切 P：旧的这一 P 不再继续出声
         source = (bvid, cid)
-        stage = Self.enginePreference == "ffmpeg" && EngineFactory.ffmpegAvailable ? .ffmpegDash : .systemDash
+        stage = Self.initialStage
+        failedCodecs = []
+        lastSameStageRetry = nil
+        error = nil
+        hasFrame = false // 新的一 P 出第一帧前盖着封面
         localRecord = DownloadManager.shared.completed(bvid: bvid, cid: cid)
         danmaku.localFolder = localRecord.map { DownloadPaths.folder($0.id) }
-        danmaku.load(cid: cid)
+
+        let alert = UserDefaults.standard.bool(forKey: "cellularAlert")
+        if localRecord == nil, alert, !Self.cellularConfirmed, NetworkStatus.shared.isCellular {
+            // 先问再取流：用户没点继续之前不发出任何媒体 / 弹幕请求
+            pendingStart = startAt
+            needsCellularConfirm = true
+            return
+        }
+        needsCellularConfirm = false
+        await start(startAt: startAt, autoplay: UserDefaults.standard.object(forKey: "autoplay") as? Bool ?? true)
+    }
+
+    /// 「移动网络播放提醒」里点了继续播放
+    func confirmCellular() {
+        guard needsCellularConfirm, !isClosed else { return }
+        Self.cellularConfirmed = true
+        needsCellularConfirm = false
+        let startAt = pendingStart
+        pendingStart = nil
+        Task { await start(startAt: startAt, autoplay: true) }
+    }
+
+    private func start(startAt: Double?, autoplay: Bool) async {
+        guard let source else { return }
+        let generation = generation
+        danmaku.load(cid: source.cid)
         await play(quality: Self.defaultQuality, resumeAt: startAt)
-        if UserDefaults.standard.object(forKey: "autoplay") as? Bool ?? true { engine.play() }
+        guard !isClosed, generation == self.generation, error == nil else { return }
+        if autoplay { engine.play() }
+    }
+
+    /// 播放区里的「重试」：从第一级重新取流，回到当前位置
+    func retry() {
+        guard !isClosed, source != nil, !needsCellularConfirm else { return }
+        generation += 1
+        let generation = generation
+        stage = Self.initialStage
+        failedCodecs = []
+        lastSameStageRetry = nil
+        error = nil
+        let time = currentTime > 0 ? currentTime : nil
+        let qn = quality > 0 ? quality : Self.defaultQuality
+        Task {
+            await play(quality: qn, resumeAt: time)
+            guard !isClosed, generation == self.generation, error == nil else { return }
+            engine.play()
+        }
     }
 
     func changeQuality(_ qn: Int) async {
-        guard qn != quality else { return }
+        guard qn != quality, !isClosed, source != nil else { return }
+        generation += 1
+        let generation = generation
         let time = currentTime
         let wasPlaying = isPlaying
         await play(quality: qn, resumeAt: time)
-        if wasPlaying { engine.play() }
+        if wasPlaying, !isClosed, generation == self.generation { engine.play() }
     }
 
+    /// 取流结果：等全部 await 结束、确认仍是当前世代后才一次性提交到控制器
+    private struct Prepared {
+        let url: URL
+        var headers: [String: String]?
+        let label: String
+        let session: DashHLSSession?
+        let codec: Int?
+        let quality: Int
+        /// 0 表示等引擎就绪后再给出（MP4）
+        let duration: Double
+        let qualities: [QualityOption]
+    }
+
+    /// 取流并装载。所有结果在最后一个 await 之后、核对世代通过才写入（hls、画质、时长、引擎），
+    /// 旧的一 P / 旧画质的请求晚回来时直接丢弃（它建的本地代理会话随之释放）
     private func play(quality qn: Int, resumeAt time: Double?) async {
-        guard let source else { return }
+        guard let source, !isClosed else { return }
+        let generation = generation
         do {
-            let url: URL
-            var headers: [String: String]?
-            let label: String
+            let prepared: Prepared
             switch stage {
             case .systemDash, .ffmpegDash:
                 if let record = localRecord {
-                    // 离线缓存：画质固定为缓存时选的那一档
-                    let session = try await DashHLSBuilder.buildLocal(record)
-                    hls = session
-                    currentCodec = record.video.codec
-                    quality = record.quality
-                    duration = Double(record.duration)
-                    qualities = [QualityOption(id: record.quality, name: record.qualityName)]
-                    url = session.masterURL
-                    label = "本地缓存 · " + DashSelection(video: record.video, audio: record.audio).label
+                    prepared = try await prepareLocal(record)
                 } else {
                     // FFmpeg 不受系统解码器限制，不沿用系统引擎的失败编码
-                    let prepared = try await prepareDash(source, quality: qn, excluding: stage == .systemDash ? failedCodecs : [])
-                    url = prepared.0
-                    label = prepared.1
+                    prepared = try await prepareDash(source, quality: qn, excluding: stage == .systemDash ? failedCodecs : [])
                 }
             case .systemMP4:
-                url = try await prepareMP4(source, quality: qn)
-                headers = BiliClient.mediaHeaders
-                label = "MP4"
+                prepared = try await prepareMP4(source, quality: qn)
             }
+            // 取流期间已被关掉，或用户又切了 P / 画质：作废
+            guard !isClosed, generation == self.generation else { return }
+            hls = prepared.session
+            currentCodec = prepared.codec
+            quality = prepared.quality
+            duration = prepared.duration
+            qualities = prepared.qualities
             switchEngine(to: stage.engine)
             itemWasReady = false
-            engine.load(url: url, headers: headers, startAt: time)
-            streamLabel = "\(engine.kind.rawValue) · \(label)"
+            engine.load(url: prepared.url, headers: prepared.headers, startAt: time)
+            // 已装载的这一项和它的时钟一起提交：进度上报只采样这里（不会把上一 P 的进度记到新 CID 上）
+            playingCid = source.cid
+            currentTime = time ?? 0
+            bufferedTime = 0
+            streamLabel = "\(engine.kind.rawValue) · \(prepared.label)"
             error = nil
         } catch {
+            guard !isClosed, generation == self.generation else { return }
             // 这一级连流都拿不到（无 DASH / 无可用编码），直接走下一级
             if advanceStage() {
                 await play(quality: qn, resumeAt: time)
             } else {
-                self.error = error.localizedDescription
+                self.error = Self.describe(error, offline: localRecord != nil)
             }
         }
     }
 
-    private func prepareDash(_ source: (bvid: String, cid: Int), quality qn: Int, excluding: Set<Int>) async throws -> (URL, String) {
+    /// 离线缓存：画质固定为缓存时选的那一档
+    private func prepareLocal(_ record: DownloadRecord) async throws -> Prepared {
+        let session = try await DashHLSBuilder.buildLocal(record)
+        return Prepared(
+            url: session.masterURL,
+            label: "本地缓存 · " + DashSelection(video: record.video, audio: record.audio).label,
+            session: session,
+            codec: record.video.codec,
+            quality: record.quality,
+            duration: Double(record.duration),
+            qualities: [QualityOption(id: record.quality, name: record.qualityName)]
+        )
+    }
+
+    private func prepareDash(_ source: (bvid: String, cid: Int), quality qn: Int, excluding: Set<Int>) async throws -> Prepared {
         let info = try await BiliClient.shared.get(.playURL(bvid: source.bvid, cid: source.cid, qn: qn, dash: true), as: PlayURLInfo.self)
         guard let dash = info.dash else { throw DashError.noStream }
         let preference = UserDefaults.standard.string(forKey: "codecPreference") ?? "auto"
@@ -230,23 +386,48 @@ final class PlayerController {
             return dash
         }
         let session = try await DashHLSBuilder.build(selection, refresher: refresher)
-        hls = session
-        currentCodec = selection.video.codec
-        quality = selection.quality
-        duration = Double(dash.duration)
-        qualities = Self.options(accept: info, available: Set(dash.video.map(\.id)))
-        return (session.masterURL, "DASH · " + selection.label)
+        return Prepared(
+            url: session.masterURL,
+            label: "DASH · " + selection.label,
+            session: session,
+            codec: selection.video.codec,
+            quality: selection.quality,
+            duration: Double(dash.duration),
+            qualities: Self.options(accept: info, available: Set(dash.video.map(\.id)))
+        )
     }
 
-    private func prepareMP4(_ source: (bvid: String, cid: Int), quality qn: Int) async throws -> URL {
+    private func prepareMP4(_ source: (bvid: String, cid: Int), quality qn: Int) async throws -> Prepared {
         let info = try await BiliClient.shared.get(.playURL(bvid: source.bvid, cid: source.cid, qn: qn, dash: false), as: PlayURLInfo.self)
         guard let raw = info.durl?.first?.url, let url = URL(string: raw) else { throw BiliError.emptyData }
-        hls = nil
-        currentCodec = nil
-        duration = 0 // 播放项就绪后由引擎给出
-        quality = info.quality
-        qualities = Self.options(accept: info, available: nil)
-        return url
+        return Prepared(
+            url: url,
+            headers: BiliClient.mediaHeaders,
+            label: "MP4",
+            session: nil,
+            codec: nil,
+            quality: info.quality,
+            duration: 0,
+            qualities: Self.options(accept: info, available: nil)
+        )
+    }
+
+    /// 播放区显示的错误：区分登录失效、无权观看、网络和媒体本身的问题
+    private static func describe(_ error: Error, offline: Bool) -> String {
+        if offline { return "离线缓存无法播放，可删除后重新缓存" }
+        switch error {
+        case BiliError.api(let code, let message):
+            switch code {
+            case -101: return "登录已失效，请重新登录后播放"
+            case -403, -404, 62002, 62004, 62012, 87007, 87008: return "无法观看：\(message)"
+            default: return "取流失败：\(message)（\(code)）"
+            }
+        case BiliError.http(let status): return "网络错误（HTTP \(status)），请稍后重试"
+        case let urlError as URLError:
+            return urlError.code == .notConnectedToInternet ? "网络未连接，请检查网络后重试" : "网络连接失败，请稍后重试"
+        case is DashError: return "视频流解析失败，请稍后重试"
+        default: return "播放失败，请稍后重试"
+        }
     }
 
     /// accept_quality 里列出的全部画质；DASH 下没有返回流的那几档标为不可用（需登录 / 大会员）
@@ -274,14 +455,26 @@ final class PlayerController {
     private func handle(_ event: EngineEvent) {
         switch event {
         case .ready:
+            // 媒体可播 ≠ 画面可显示：封面要等 firstFrame 才撤
             itemWasReady = true
-            hasFrame = true
             let seconds = engine.duration
             if seconds > 0 { duration = seconds }
             RemoteControl.shared.refresh(self)
+        case .firstFrame:
+            hasFrame = true
         case .failed:
             recover()
         case .ended:
+            switch endAction {
+            case .loop:
+                seek(seconds: 0)
+                engine.play()
+                return
+            case .stop:
+                return
+            case .next:
+                break
+            }
             // 多 P 连播（设置里可关）
             if hasNextPart, UserDefaults.standard.object(forKey: "autoNextPart") as? Bool ?? true {
                 onRequestPart?(1)
@@ -293,19 +486,24 @@ final class PlayerController {
 
     /// 播放中途失败：同一级换编码，或进入下一级，并从当前位置续播
     private func recover() {
+        guard !isClosed else { return }
         let canRetrySameStage = lastSameStageRetry.map { Date.now.timeIntervalSince($0) > 60 } ?? true
         if itemWasReady, canRetrySameStage {
             // 播放中途出错：先在同一级重新取流（新地址、必要时重启本地代理），不急着降级
             lastSameStageRetry = .now
-        } else if stage == .systemDash, let codec = currentCodec, codec != 7 {
+        } else if stage == .systemDash, localRecord == nil, let codec = currentCodec, codec != 7 {
+            // 在线流可以换一种编码再试；离线缓存只有这一个文件，换编码没有意义，直接进入下一级
             failedCodecs.insert(codec)
         } else if !advanceStage() {
-            error = "播放失败，请稍后重试"
+            error = localRecord != nil ? "离线缓存无法播放，可删除后重新缓存" : "播放失败，请稍后重试"
             return
         }
+        generation += 1
+        let generation = generation
         let time = currentTime, qn = quality
         Task {
             await play(quality: qn, resumeAt: time)
+            guard !isClosed, generation == self.generation, error == nil else { return }
             engine.play()
         }
     }
@@ -326,10 +524,12 @@ final class PlayerController {
     // MARK: 控制
 
     func togglePlay() {
+        guard !isClosed else { return }
         isPlaying ? engine.pause() : engine.play()
     }
 
     func play() {
+        guard !isClosed else { return }
         engine.play()
     }
 
@@ -362,7 +562,8 @@ final class PlayerController {
         isBoosting = on
         let effective = on ? boostRate : rate
         engine.setRate(effective)
-        danmaku.resume(rate: effective)
+        // 暂停中松手：弹幕保持暂停，等真正开始播放时由 tick 按当时的速度恢复
+        if isPlaying { danmaku.resume(rate: effective) }
     }
 
     func sleep(after minutes: Int?) {
@@ -408,7 +609,12 @@ final class PlayerController {
         let playing = engine.isPlaying
         if playing != isPlaying {
             isPlaying = playing
-            if !playing { isBoosting = false }
+            if !playing, isBoosting {
+                // 长按中卡顿 / 暂停：结束临时倍速时引擎也要回到用户倍速，
+                // 否则缓冲结束后一直按 2× 播放，而松手时 setBoost(false) 因为已不在加速而被忽略
+                isBoosting = false
+                engine.setRate(rate)
+            }
             playing ? danmaku.resume(rate: isBoosting ? boostRate : rate) : danmaku.pause()
             RemoteControl.shared.refresh(self)
         }

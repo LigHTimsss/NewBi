@@ -349,7 +349,10 @@ struct ChatMessage: Decodable, Identifiable, Sendable {
     let content: String
     let seqno: Int
     let timestamp: Int
-    let msgStatus: Int?
+    /// 1 为已撤回。收到撤回指令时在本地改写
+    var msgStatus: Int?
+    /// 消息的全局 key：撤回指令的 content 就是被撤回那条的 key
+    let msgKey: Int?
 
     var id: Int { seqno }
     var date: Date { Date(timeIntervalSince1970: TimeInterval(timestamp)) }
@@ -358,6 +361,12 @@ struct ChatMessage: Decodable, Identifiable, Sendable {
     /// 撤回指令本身（content 是被撤回消息的 key），不显示
     var isRecallCommand: Bool { msgType == 5 }
 
+    /// 撤回指令要撤回的那条消息的 key（content 可能是裸数字，也可能带引号）
+    var recalledKey: Int? {
+        guard isRecallCommand else { return nil }
+        return Int(content.trimmingCharacters(in: CharacterSet(charactersIn: "\" \n")))
+    }
+
     private enum CodingKeys: String, CodingKey {
         case senderUID = "sender_uid"
         case msgType = "msg_type"
@@ -365,6 +374,25 @@ struct ChatMessage: Decodable, Identifiable, Sendable {
         case seqno = "msg_seqno"
         case timestamp
         case msgStatus = "msg_status"
+        case msgKey = "msg_key"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        senderUID = try container.decode(Int.self, forKey: .senderUID)
+        msgType = try container.decode(Int.self, forKey: .msgType)
+        content = try container.decode(String.self, forKey: .content)
+        seqno = try container.decode(Int.self, forKey: .seqno)
+        timestamp = try container.decode(Int.self, forKey: .timestamp)
+        msgStatus = try container.decodeIfPresent(Int.self, forKey: .msgStatus)
+        // 数字或字符串都接受；解不出来也不影响这条消息本身
+        if let number = try? container.decodeIfPresent(Int.self, forKey: .msgKey) {
+            msgKey = number
+        } else if let text = try? container.decodeIfPresent(String.self, forKey: .msgKey) {
+            msgKey = Int(text)
+        } else {
+            msgKey = nil
+        }
     }
 
     init(senderUID: Int, text: String, seqno: Int, timestamp: Int) {
@@ -374,6 +402,7 @@ struct ChatMessage: Decodable, Identifiable, Sendable {
         self.seqno = seqno
         self.timestamp = timestamp
         self.msgStatus = 0
+        self.msgKey = nil
     }
 
     static func encodeText(_ text: String) -> String {

@@ -392,7 +392,8 @@ struct GlassCircleButton: View {
     var size: CGFloat = 40
     /// 视频上方用 .clear，更通透
     var glass: Glass = .regular
-    var action: () -> Void = {}
+    /// 必填：不出现看得见却点了没反应的按钮
+    var action: () -> Void
 
     var body: some View {
         Button(action: action) {

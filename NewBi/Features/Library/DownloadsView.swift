@@ -118,7 +118,7 @@ private struct CachedRow: View {
     let record: DownloadRecord
 
     var body: some View {
-        VideoLink(card: record.card) {
+        VideoLink(card: record.card, pinsPart: true) {
             HStack(spacing: 14) {
                 RemoteImage(url: record.coverURL, size: CGSize(width: 128, height: 72))
                     .frame(width: 128, height: 72)

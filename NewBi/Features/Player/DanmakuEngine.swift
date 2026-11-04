@@ -57,7 +57,14 @@ final class DanmakuEngine {
     private var cursor = 0
     private var lastTime: Double = -1
     private var cid: Int?
+    /// 每次 load(cid:) 加一：上一轮（哪怕是同一个 cid）迟到的分段不再并入
+    private var generation = 0
+    /// 已成功加载的分段（含合法的空段，不再请求）
     private var loadedSegments: Set<Int> = []
+    private var inflightSegments: Set<Int> = []
+    /// 失败的分段：连续失败次数和下次可重试的时刻（退避），网络恢复后能补上这一段
+    private var segmentFailures: [Int: (count: Int, retryAt: Date)] = [:]
+    private static let maxSegmentAttempts = 5
     /// 离线缓存目录：有本地弹幕分段时优先读本地
     var localFolder: URL?
 
@@ -81,28 +88,79 @@ final class DanmakuEngine {
 
     func load(cid: Int) {
         self.cid = cid
+        generation += 1
         items = []
+        cursor = 0
         loadedSegments = []
+        inflightSegments = []
+        segmentFailures = [:]
         clear()
         requestSegment(1)
     }
 
     private func requestSegment(_ index: Int) {
-        guard let cid, loadedSegments.insert(index).inserted else { return }
+        guard let cid, !loadedSegments.contains(index), !inflightSegments.contains(index) else { return }
+        if let failure = segmentFailures[index], failure.retryAt > .now { return }
+        inflightSegments.insert(index)
+        let generation = generation
         let local = localFolder?.appending(path: "dm_\(index).pb")
         Task {
-            var segment = local.flatMap { try? Data(contentsOf: $0) }
-            if segment == nil {
-                segment = try? await BiliClient.shared.data(.danmakuSegment(cid: cid, index: index))
+            // 读本地文件、请求网络、Protobuf 解析、排序都在后台，主线程只做有序合并
+            let result = await Task.detached(priority: .utility) {
+                await Self.fetchSegment(cid: cid, index: index, local: local)
+            }.value
+            guard self.generation == generation else { return }
+            inflightSegments.remove(index)
+            if let parsed = result {
+                loadedSegments.insert(index)
+                segmentFailures[index] = nil
+                merge(parsed)
+            } else {
+                let count = (segmentFailures[index]?.count ?? 0) + 1
+                if count >= Self.maxSegmentAttempts {
+                    loadedSegments.insert(index) // 多次失败（多半是坏数据）：本次播放不再请求
+                } else {
+                    // 5s → 10s → 20s → 40s
+                    let delay = 5 * pow(2, Double(count - 1))
+                    segmentFailures[index] = (count, .now.addingTimeInterval(delay))
+                }
             }
-            guard let data = segment else { return }
-            // Protobuf 解析放后台
-            let parsed = await Task.detached(priority: .utility) { (try? DanmakuDecoder.decode(data)) ?? [] }.value
-            guard self.cid == cid else { return }
-            items.append(contentsOf: parsed)
-            items.sort { $0.time < $1.time }
-            cursor = items.lowerBound(of: max(lastTime, 0))
         }
+    }
+
+    /// 本地分段（离线缓存）优先；本地缺失或损坏时退回网络。失败返回 nil，合法的空段返回 []
+    nonisolated private static func fetchSegment(cid: Int, index: Int, local: URL?) async -> [Danmaku]? {
+        if let local, let data = try? Data(contentsOf: local), let parsed = try? DanmakuDecoder.decode(data) {
+            return parsed.sorted { $0.time < $1.time }
+        }
+        guard let data = try? await BiliClient.shared.data(.danmakuSegment(cid: cid, index: index)),
+              let parsed = try? DanmakuDecoder.decode(data) else { return nil }
+        return parsed.sorted { $0.time < $1.time }
+    }
+
+    /// 两个有序数组线性合并（不对全量重新排序）
+    private func merge(_ fresh: [Danmaku]) {
+        guard !fresh.isEmpty else { return }
+        if let last = items.last, let first = fresh.first, first.time < last.time {
+            var merged: [Danmaku] = []
+            merged.reserveCapacity(items.count + fresh.count)
+            var i = 0, j = 0
+            while i < items.count, j < fresh.count {
+                if fresh[j].time < items[i].time {
+                    merged.append(fresh[j])
+                    j += 1
+                } else {
+                    merged.append(items[i])
+                    i += 1
+                }
+            }
+            merged.append(contentsOf: items[i...])
+            merged.append(contentsOf: fresh[j...])
+            items = merged
+        } else {
+            items.append(contentsOf: fresh)
+        }
+        cursor = items.lowerBound(of: max(lastTime, 0))
     }
 
     // MARK: 布局与时钟
@@ -151,18 +209,12 @@ final class DanmakuEngine {
     }
 
     func pause() {
-        guard layer.speed != 0 else { return }
-        let paused = hostTime
-        layer.speed = 0
-        layer.timeOffset = paused
+        retime(speed: 0)
     }
 
+    /// 继续播放，或在播放中改变倍速（长按加速、调节播放速度）
     func resume(rate: Float) {
-        let paused = layer.timeOffset
-        layer.speed = rate
-        layer.timeOffset = 0
-        layer.beginTime = 0
-        layer.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) - paused
+        retime(speed: rate)
     }
 
     func clear() {
@@ -178,6 +230,24 @@ final class DanmakuEngine {
     // MARK: - Private
 
     private var hostTime: CFTimeInterval { layer.convertTime(CACurrentMediaTime(), from: nil) }
+
+    /// 改变弹幕图层的时间流速，并让图层本地时间在切换点连续：在飞的弹幕原地减速 / 停住 / 加速，不跳、不闪。
+    /// Core Animation：本地时间 = (父时间 − beginTime) × speed + timeOffset。
+    /// 切换前先读出本地时间 L 和父时间 P，再令 beginTime = P、timeOffset = L：切换瞬间本地时间仍是 L，之后按新速度走。
+    /// （旧实现把本地时间当父时间用，倍速 ≠ 1 时本地时间整体错位，轨道占用判断失效、弹幕重叠；
+    /// 播放中再次 resume 还会把本地时间归零。）
+    private func retime(speed: Float) {
+        guard layer.speed != speed else { return }
+        let now = CACurrentMediaTime()
+        let local = layer.convertTime(now, from: nil)
+        let parent = layer.superlayer?.convertTime(now, from: nil) ?? now
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.beginTime = parent
+        layer.timeOffset = local
+        layer.speed = speed
+        CATransaction.commit()
+    }
 
     private func rebuildTracks() {
         let scrollCount = max(1, Int(size.height * settings.areaRatio / lineHeight))
@@ -202,9 +272,37 @@ final class DanmakuEngine {
         return true
     }
 
+    /// 顺序：先看有没有空轨道 → 只排版量宽 → 抢到轨道 → 才画位图。
+    /// 高能时刻大部分候选在第一步就被挡掉，主线程不再为进不了屏的弹幕排版、栅格化
     private func spawn(_ item: Danmaku, now: CFTimeInterval, own: Bool = false) {
-        guard let (image, textSize) = render(item, bordered: own) else { return }
         let fixedHold: CFTimeInterval = 4
+        let isTop = item.mode == 5, isFixed = item.mode == 4 || item.mode == 5
+        if !own {
+            let tracks = isFixed ? (isTop ? topTracks : bottomTracks) : scrollTracks
+            guard tracks.contains(where: { $0 <= now }) else { return }
+        }
+
+        let text = attributedText(item)
+        let inset: CGFloat = own ? 6 : 2
+        let raw = text.size()
+        let textSize = CGSize(width: ceil(raw.width) + inset * 2, height: ceil(raw.height) + 2)
+
+        let track: Int
+        let hold: CFTimeInterval
+        let duration = settings.scrollDuration
+        if isFixed {
+            hold = fixedHold
+            guard let index = isTop ? take(&topTracks, now: now, hold: hold) : take(&bottomTracks, now: now, hold: hold) else { return }
+            track = index
+        } else {
+            let speed = (size.width + textSize.width) / duration
+            // 轨道空出 = 本条尾部完全进入屏幕 + 间隔
+            hold = (textSize.width + 16) / speed
+            guard let index = take(&scrollTracks, now: now, hold: hold, force: own) else { return }
+            track = index
+        }
+
+        guard let image = render(text, size: textSize, inset: inset, bordered: own) else { return }
         let sublayer = pool.popLast() ?? CALayer()
 
         CATransaction.begin()
@@ -215,29 +313,14 @@ final class DanmakuEngine {
         sublayer.contentsScale = scale
         sublayer.bounds = CGRect(origin: .zero, size: textSize)
 
-        switch item.mode {
-        case 4, 5:
-            let isTop = item.mode == 5
-            guard let track = isTop ? take(&topTracks, now: now, hold: fixedHold) : take(&bottomTracks, now: now, hold: fixedHold) else {
-                pool.append(sublayer)
-                return
-            }
+        if isFixed {
             let y = isTop
                 ? (CGFloat(track) + 0.5) * lineHeight
                 : size.height - (CGFloat(track) + 0.5) * lineHeight
             sublayer.position = CGPoint(x: size.width / 2, y: y)
             layer.addSublayer(sublayer)
             active.append((sublayer, now + fixedHold))
-
-        default:
-            let duration = settings.scrollDuration
-            let speed = (size.width + textSize.width) / duration
-            // 轨道空出 = 本条尾部完全进入屏幕 + 间隔
-            let hold = (textSize.width + 16) / speed
-            guard let track = take(&scrollTracks, now: now, hold: hold, force: own) else {
-                pool.append(sublayer)
-                return
-            }
+        } else {
             let y = (CGFloat(track) + 0.5) * lineHeight
             sublayer.position = CGPoint(x: -textSize.width / 2, y: y) // 模型值 = 终点，动画结束不会闪回
             let move = CABasicAnimation(keyPath: "position.x")
@@ -278,18 +361,18 @@ final class DanmakuEngine {
         if pool.count < 120 { pool.append(sublayer) }
     }
 
-    /// 文字 + 描边一次性画成位图，之后只做合成
-    private func render(_ item: Danmaku, bordered: Bool = false) -> (CGImage, CGSize)? {
+    private func attributedText(_ item: Danmaku) -> NSAttributedString {
         let fontSize = item.fontSize <= 18 ? settings.fontSize * 0.8 : item.fontSize >= 36 ? settings.fontSize * 1.3 : settings.fontSize
-        let text = NSAttributedString(string: item.content, attributes: [
+        return NSAttributedString(string: item.content, attributes: [
             .font: UIFont.systemFont(ofSize: fontSize, weight: .bold),
             .foregroundColor: UIColor(rgb: item.color),
             .strokeColor: UIColor.black.withAlphaComponent(0.55),
             .strokeWidth: -2.5,
         ])
-        let raw = text.size()
-        let inset: CGFloat = bordered ? 6 : 2
-        let size = CGSize(width: ceil(raw.width) + inset * 2, height: ceil(raw.height) + 2)
+    }
+
+    /// 文字 + 描边一次性画成位图，之后只做合成（只给已经抢到轨道的弹幕画）
+    private func render(_ text: NSAttributedString, size: CGSize, inset: CGFloat, bordered: Bool) -> CGImage? {
         let format = UIGraphicsImageRendererFormat()
         format.scale = scale
         format.opaque = false
@@ -303,7 +386,7 @@ final class DanmakuEngine {
             }
             text.draw(at: CGPoint(x: inset, y: 1))
         }
-        return image.cgImage.map { ($0, size) }
+        return image.cgImage
     }
 }
 
@@ -403,8 +486,8 @@ private struct ProtoReader {
 
     /// 返回共享底层存储的切片，不拷贝
     mutating func lengthDelimited() throws -> ArraySlice<UInt8> {
-        let length = Int(truncatingIfNeeded: try varint())
-        guard length >= 0, index + length <= bytes.endIndex else { throw Malformed() }
+        // 长度来自不可信数据：先确认能表示成 Int，再和剩余字节数比较（不做 index + length，避免溢出崩溃）
+        guard let length = Int(exactly: try varint()), length <= bytes.endIndex - index else { throw Malformed() }
         defer { index += length }
         return bytes[index..<(index + length)]
     }
@@ -420,7 +503,7 @@ private struct ProtoReader {
     }
 
     private mutating func advance(_ count: Int) throws {
-        guard index + count <= bytes.endIndex else { throw Malformed() }
+        guard count <= bytes.endIndex - index else { throw Malformed() }
         index += count
     }
 }

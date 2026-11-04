@@ -1,18 +1,25 @@
-# Codemagic 云端编译（GitHub 的 macOS 虚拟机排不上队时用）：打一个未签名的 ipa，自签后装真机
-# 只手动触发（不写 triggering），省免费额度；步骤与 .github/workflows/build.yml 一致
+# Codemagic 云端编译（日常构建在这里）：打一个未签名的 ipa，自签后装真机
+# 只手动触发（不写 triggering），省免费额度；GitHub Actions（.github/workflows/build.yml）只作备用、也只能手动触发
+#
+# 可复现：
+# - Xcode 固定版本，不跟 latest 漂移（2026-11 时 latest 即 27.1.x）。升级时改这里，构建通过后再提交
+# - 依赖锁文件 ci/Package.resolved：存在时只用里面的确切版本（含 KSPlayer 间接引入的 FFmpegKit 等二进制包）；
+#   不存在时正常解析，并把这次解析出的 Package.resolved 作为产物导出——下载后放到 ci/ 提交，之后的构建就锁住了
 workflows:
   unsigned-ipa:
     name: 未签名 ipa
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      xcode: latest
+      xcode: 27.1
     cache:
       cache_paths:
         - $CM_BUILD_DIR/build/SourcePackages
     scripts:
       - name: Xcode 版本
-        script: xcodebuild -version
+        script: |
+          xcodebuild -version
+          xcodebuild -version > build-toolchain.log
       - name: 下载 Metal 工具链
         # Xcode 26 起 Metal 工具链不随 Xcode 预装；播放器依赖里有 .metal 着色器，缺了会编译失败
         script: |
@@ -28,11 +35,23 @@ workflows:
           xcodegen generate
       - name: 打未签名 ipa（真机）
         script: |
+          resolved=NewBi.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          lock=""
+          if [ -f ci/Package.resolved ]; then
+            mkdir -p "$(dirname "$resolved")"
+            cp ci/Package.resolved "$resolved"
+            lock="-onlyUsePackageVersionsFromResolvedFile"
+            echo "使用 ci/Package.resolved 锁定的依赖版本"
+          else
+            echo "没有 ci/Package.resolved：按 project.yml 解析依赖，结果见产物 Package.resolved"
+          fi
           status=0
           xcodebuild build \
             -project NewBi.xcodeproj -scheme NewBi -configuration Release \
-            -destination 'generic/platform=iOS' -derivedDataPath build \
+            -destination 'generic/platform=iOS' -derivedDataPath build $lock \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" > build-device.log 2>&1 || status=$?
+          # 这次实际用到的依赖版本，和 ipa 一起留档
+          cp "$resolved" Package.resolved 2>/dev/null || true
           # 只把错误打到控制台，完整日志在产物里
           grep -E "error:|BUILD (SUCCEEDED|FAILED)" build-device.log | sort -u || true
           [ $status -eq 0 ] || exit $status
@@ -41,4 +60,5 @@ workflows:
           zip -qry NewBi-unsigned.ipa Payload
     artifacts:
       - NewBi-unsigned.ipa
+      - Package.resolved
       - build-*.log

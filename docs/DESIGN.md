@@ -463,8 +463,12 @@ seg.so ──▶ 手写 Protobuf 解析（后台线程）──▶ 按时间排�
 ---
 
 ## 9. 数据与安全
-- Cookie：`HTTPCookieStorage.shared`；`SESSDATA`、`bili_jct`、`refresh_token` 加密存 Keychain（待做）
-- Cookie 刷新：`/x/passport-login/web/cookie/info` + `refresh_token` 流程
+- 凭据归属（`Core/Auth/Credentials.swift`）：
+  - Cookie（`SESSDATA`、`bili_jct`、`DedeUserID`…）只有一份，在系统 `HTTPCookieStorage.shared`：持久化在 App 沙盒内、受系统数据保护，API、媒体代理、后台下载共用；不另存副本
+  - `refresh_token`：Keychain 通用密码项，`AfterFirstUnlockThisDeviceOnly`（后台唤醒也能读；不进 iCloud 钥匙串、不随备份迁移到别的设备）；轮换用 `SecItemUpdate` 原地替换
+  - 退出登录：删 B 站域下除 `buvid*` 以外的 Cookie、删 Keychain 里的 `refresh_token`；会话世代加一，在途的查询结果作废
+- Cookie 刷新（`CookieRefresher`，actor 串行，每次启动查一次）：`cookie/info` 问是否需要 → RSA-OAEP 加密 `refresh_<时间戳>` 取 `correspond` 页里的 `refresh_csrf` → `cookie/refresh` 换新 Cookie 与新 `refresh_token`（先写 Keychain）→ 用新 csrf + 旧 token `confirm/refresh`。刷新途中退出登录时丢弃新 Cookie
+- 登录态：只有服务器明确回答才改；超时、断网保留最后确认的状态，回到前台 / 网络恢复时再查
 - 本地设置：`@AppStorage`（主题色、外观、自动播放）；历史 / 屏蔽词后续用 SwiftData
 - 不接任何第三方统计；日志不打印 Cookie
 
@@ -480,11 +484,11 @@ NewBi/
     ├── App/            NewBiApp.swift · RootView.swift · Orientation.swift
     ├── DesignSystem/   Theme.swift · GlassComponents.swift · RemoteImage.swift · RichText.swift · ImageViewer.swift
     ├── Core/
-    │   ├── Network/    BiliClient.swift · Endpoint.swift · WBISigner.swift
+    │   ├── Network/    BiliClient.swift · Endpoint.swift · WBISigner.swift · NetworkStatus.swift
     │   ├── Media/      LocalMediaServer.swift（127.0.0.1 媒体代理，含本地文件）
     │   ├── Downloads/  DownloadManager.swift（后台下载 + 实况活动）· DownloadRecord.swift
     │   ├── Models/     Video.swift · Search.swift · Comment.swift · Space.swift · Library.swift · Dynamic.swift
-    │   └── Auth/       QRLoginModel.swift
+    │   └── Auth/       QRLoginModel.swift · Credentials.swift（Keychain、Cookie 刷新）
     └── Features/
         ├── Home/       HomeView.swift
         ├── Video/      VideoDetailView.swift
@@ -519,7 +523,7 @@ NewBi/
 | 风险 | 对策 |
 |---|---|
 | 接口变更 / 风控 | 接口集中在 `Endpoint`；补齐 buvid、WBI；控制频率 |
-| 账号安全 | 只用官方扫码登录，Cookie 存 Keychain |
+| 账号安全 | 只用官方扫码登录；Cookie 由系统 Cookie 存储保管（沙盒 + 数据保护），`refresh_token` 存 Keychain（仅本机），退出时全部清除（§9） |
 | 无法上架 | 个人自用；免费账号 7 天重签，或付费账号 TestFlight |
 | DASH 复杂 | 已实现 DASH→本地 HLS + FFmpeg 兜底引擎，失败逐级降级 |
 | **Windows 开发环境** | iOS 编译**必须在 macOS + Xcode 26**；Windows 可写代码，构建用 Mac 或云端 macOS CI |

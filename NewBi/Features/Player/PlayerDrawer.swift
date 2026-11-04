@@ -433,7 +433,15 @@ private struct MorePanel: View {
             } label: {
                 tileLabel("timer", controller.sleepDeadline == nil ? "定时关闭" : "定时中", on: controller.sleepDeadline != nil)
             }
-            tile("repeat", "播放方式") {} // TODO: 单集循环 / 自动连播
+            Menu {
+                Picker("播放方式", selection: Binding(get: { controller.endAction }, set: { controller.endAction = $0 })) {
+                    ForEach(PlayerController.EndAction.allCases, id: \.self) { action in
+                        Label(action.title, systemImage: action.icon).tag(action)
+                    }
+                }
+            } label: {
+                tileLabel(controller.endAction.icon, controller.endAction.title, on: controller.endAction != .next)
+            }
             tile(
                 controller.fillScreen ? "rectangle.compress.vertical" : "rectangle.expand.vertical",
                 controller.fillScreen ? "铺满" : "画面尺寸", on: controller.fillScreen
@@ -454,7 +462,6 @@ private struct MorePanel: View {
                     .background(.white.opacity(0.08), in: .rect(cornerRadius: 16))
                 Text("投屏").font(.system(size: 11)).foregroundStyle(secondaryOnDark)
             }
-            tile("flag", "举报") {} // TODO
         }
     }
 
@@ -479,8 +486,8 @@ private struct MorePanel: View {
     }
 }
 
-/// 系统投屏按钮（AirPlay）
-private struct RoutePicker: UIViewRepresentable {
+/// 系统投屏按钮（AirPlay；也能选蓝牙耳机、HomePod 等音频输出）
+struct RoutePicker: UIViewRepresentable {
     var activeTint: UIColor
 
     func makeUIView(context: Context) -> AVRoutePickerView {

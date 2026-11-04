@@ -24,6 +24,18 @@ extension Endpoint {
         Endpoint(host: passport, path: "/x/passport-login/web/qrcode/poll", query: ["qrcode_key": key])
     }
 
+    // MARK: Cookie 刷新
+
+    static func cookieInfo(csrf: String) -> Endpoint {
+        Endpoint(host: passport, path: "/x/passport-login/web/cookie/info", query: ["csrf": csrf])
+    }
+    /// 返回 HTML，refresh_csrf 在 `<div id="1-name">` 里
+    static func correspond(path: String) -> Endpoint {
+        Endpoint(host: "https://www.bilibili.com", path: "/correspond/1/\(path)")
+    }
+    static let cookieRefresh = Endpoint(host: passport, path: "/x/passport-login/web/cookie/refresh")
+    static let cookieRefreshConfirm = Endpoint(host: passport, path: "/x/passport-login/web/confirm/refresh")
+
     // MARK: 首页
 
     static func recommend(page: Int) -> Endpoint {

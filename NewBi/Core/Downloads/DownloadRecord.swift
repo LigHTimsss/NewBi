@@ -34,6 +34,8 @@ struct DownloadRecord: Codable, Identifiable, Sendable {
     var audioDone = false
     var error: String?
     let createdAt: Date
+    /// 封面是否已存到本地（旧索引里没有这一项，启动读索引时查一次文件补上）
+    var coverSaved: Bool?
 
     static func id(bvid: String, cid: Int) -> String { "\(bvid)_\(cid)" }
 
@@ -55,10 +57,9 @@ struct DownloadRecord: Codable, Identifiable, Sendable {
         return min(Double(receivedBytes) / Double(totalBytes), 1)
     }
 
-    /// 封面已下载到本地时用本地文件，断网也能显示
+    /// 封面已下载到本地时用本地文件，断网也能显示（列表滚动时不再每行查文件）
     var coverURL: String {
-        let local = DownloadPaths.cover(id)
-        return FileManager.default.fileExists(atPath: local.path) ? local.absoluteString : cover
+        coverSaved == true ? DownloadPaths.cover(id).absoluteString : cover
     }
 
     var card: VideoCard {

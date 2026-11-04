@@ -34,7 +34,8 @@ final class QRLoginModel {
                 let poll = try await BiliClient.shared.get(.qrPoll(key: qr.qrcodeKey), as: QRPoll.self)
                 switch poll.code {
                 case 0:
-                    // TODO: refresh_token 存 Keychain，用于 Cookie 刷新（DESIGN.md §9）
+                    // Cookie 已由共享 Cookie 存储收下；refresh_token 进 Keychain，供以后刷新 Cookie
+                    if let token = poll.refreshToken { Credentials.saveRefreshToken(token) }
                     phase = .success
                     return
                 case 86090: phase = .scanned

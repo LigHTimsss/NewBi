@@ -82,8 +82,16 @@ final class FFmpegEngine: NSObject, PlaybackEngine {
 
 // KSPlayer 2.3.4 的 MediaPlayerDelegate（@MainActor）
 extension FFmpegEngine: MediaPlayerDelegate {
+    /// 已被 teardown 换掉的旧播放器的回调不再上报
+    private func isCurrent(_ player: some MediaPlayerProtocol) -> Bool {
+        (player as AnyObject) === self.player
+    }
+
     func readyToPlay(player: some MediaPlayerProtocol) {
+        guard isCurrent(player) else { return }
         onEvent?(.ready)
+        // KSPlayer 没有单独的首帧回调，就绪时画面已经解出
+        onEvent?(.firstFrame)
     }
 
     func changeLoadState(player: some MediaPlayerProtocol) {}
@@ -94,6 +102,7 @@ extension FFmpegEngine: MediaPlayerDelegate {
     func playBack(player: some MediaPlayerProtocol, loopCount: Int) {}
 
     func finish(player: some MediaPlayerProtocol, error: Error?) {
+        guard isCurrent(player) else { return }
         onEvent?(error == nil ? .ended : .failed(error))
     }
 }

@@ -26,6 +26,9 @@ struct FullscreenOverlay: View {
     let model: VideoDetailModel
     @Binding var locked: Bool
     var onExit: () -> Void
+    /// 评论：退出全屏、切到评论 Tab
+    var onComments: () -> Void
+    var onFavorite: () -> Void
 
     @State private var showControls = true
     @State private var panel: PlayerPanel?
@@ -232,9 +235,10 @@ struct FullscreenOverlay: View {
                 ) {
                     Task { try? await model.toggleLike() }
                 }
-                iconButton("text.bubble", "评论", count: stat?.reply)
+                iconButton("text.bubble", "评论", count: stat?.reply, action: onComments)
                 iconButton(model.isFavoured ? "star.fill" : "star", "收藏",
-                           count: (stat?.favorite ?? 0) + model.favDelta, tint: model.isFavoured ? accent : nil)
+                           count: (stat?.favorite ?? 0) + model.favDelta, tint: model.isFavoured ? accent : nil,
+                           action: onFavorite)
                 if model.pages.count > 1 {
                     iconButton("list.bullet.rectangle", "选集", width: 30) { panel = .parts }
                 }
@@ -312,7 +316,7 @@ struct FullscreenOverlay: View {
 
     private func iconButton(
         _ icon: String, _ label: String, count: Int? = nil, tint: Color? = nil,
-        width: CGFloat = 44, action: @escaping () -> Void = {}
+        width: CGFloat = 44, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: icon)

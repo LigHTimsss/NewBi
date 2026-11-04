@@ -30,7 +30,9 @@ final class ImageMemory: @unchecked Sendable {
         anySize.setObject(image, forKey: Self.base(url), cost: cost)
     }
 
+    /// 同一张图的「任意尺寸」键：B 站图去掉 `@…` 尺寸后缀；本地文件去掉 `#宽x高` 尺寸标记
     private static func base(_ url: URL) -> NSString {
+        if url.isFileURL { return url.path as NSString }
         let string = url.absoluteString
         guard let at = string.firstIndex(of: "@") else { return string as NSString }
         return String(string[..<at]) as NSString
@@ -39,11 +41,26 @@ final class ImageMemory: @unchecked Sendable {
 
 /// 轻量图片管线：URLCache 磁盘缓存 + 内存缓存（ImageMemory）+ ImageIO 下采样。
 /// 不用 AsyncImage（无缓存、按原图解码），也不引第三方库。
+/// - 同一地址同时只下载一次；显示中的请求离屏（.task 取消）且没有别人在等时取消下载
+/// - 预取排队、限并发，把连接留给正在显示的图；排队太长时丢掉最早的（用户已经滑过去了）
 actor ImagePipeline {
     static let shared = ImagePipeline()
 
+    private struct Entry {
+        let task: Task<UIImage?, Never>
+        /// 正在等它的显示请求数
+        var consumers: Int
+        /// 预取发起的：显示请求都离开了也继续下完（滑回来时内存里就有）
+        var prefetched = false
+    }
+
+    private static let maxPrefetching = 3
+    private static let prefetchBacklog = 30
+
     private let session: URLSession
-    private var inflight: [URL: Task<UIImage?, Never>] = [:]
+    private var inflight: [URL: Entry] = [:]
+    private var prefetchQueue: [(url: URL, maxPixel: CGFloat)] = []
+    private var prefetching = 0
 
     init() {
         let config = URLSessionConfiguration.default
@@ -56,32 +73,105 @@ actor ImagePipeline {
 
     func image(for url: URL, maxPixel: CGFloat, priority: TaskPriority = .userInitiated) async -> UIImage? {
         if let cached = ImageMemory.shared.image(for: url) { return cached }
-        if let task = inflight[url] { return await task.value }
-
-        let session = session
-        // 下载、解码都放到后台，不占用 actor 串行队列，也不占主线程
-        let task = Task.detached(priority: priority) { () -> UIImage? in
-            guard let (data, _) = try? await session.data(from: url) else { return nil }
-            guard let image = Self.downsample(data, maxPixel: maxPixel) else { return nil }
-            ImageMemory.shared.store(image, for: url)
-            return image
+        let task: Task<UIImage?, Never>
+        if var entry = inflight[url] {
+            // 加入已在进行的下载（可能是预取发起的：等待会把它的优先级抬上来）
+            entry.consumers += 1
+            inflight[url] = entry
+            task = entry.task
+        } else {
+            task = load(url, maxPixel: maxPixel, priority: priority)
+            inflight[url] = Entry(task: task, consumers: 1)
         }
-        inflight[url] = task
-        let image = await task.value
-        inflight[url] = nil
-        return image
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { await self.leave(url, task) }
+        }
     }
 
     /// 预取：列表新一页到了就把封面下载、解码好，滑到时直接从内存出图
     func prefetch(_ urls: [URL], maxPixel: CGFloat) {
-        for url in urls where ImageMemory.shared.image(for: url) == nil && inflight[url] == nil {
-            Task { _ = await image(for: url, maxPixel: maxPixel, priority: .utility) }
+        for url in urls where ImageMemory.shared.image(for: url) == nil && inflight[url] == nil
+            && !prefetchQueue.contains(where: { $0.url == url }) {
+            prefetchQueue.append((url, maxPixel))
         }
+        if prefetchQueue.count > Self.prefetchBacklog {
+            prefetchQueue.removeFirst(prefetchQueue.count - Self.prefetchBacklog)
+        }
+        pumpPrefetch()
+    }
+
+    private func pumpPrefetch() {
+        while prefetching < Self.maxPrefetching, !prefetchQueue.isEmpty {
+            let (url, maxPixel) = prefetchQueue.removeFirst()
+            guard ImageMemory.shared.image(for: url) == nil, inflight[url] == nil else { continue }
+            let task = load(url, maxPixel: maxPixel, priority: .utility)
+            inflight[url] = Entry(task: task, consumers: 0, prefetched: true)
+            prefetching += 1
+            Task {
+                _ = await task.value
+                self.prefetchFinished()
+            }
+        }
+    }
+
+    private func prefetchFinished() {
+        prefetching -= 1
+        pumpPrefetch()
+    }
+
+    /// 下载、解码都放到后台，不占用 actor 串行队列，也不占主线程；结束时自己从 inflight 里摘掉
+    private func load(_ url: URL, maxPixel: CGFloat, priority: TaskPriority) -> Task<UIImage?, Never> {
+        let session = session
+        let task = Task.detached(priority: priority) { () -> UIImage? in
+            let image: UIImage?
+            if url.isFileURL {
+                // 离线缓存的封面：直接从文件下采样（地址里的 #宽x高 只是缓存键）
+                image = Self.downsample(file: URL(filePath: url.path), maxPixel: maxPixel)
+            } else {
+                guard let (data, _) = try? await session.data(from: url), !Task.isCancelled else { return nil }
+                image = Self.downsample(data, maxPixel: maxPixel)
+            }
+            if let image { ImageMemory.shared.store(image, for: url) }
+            return image
+        }
+        Task { [weak self] in
+            _ = await task.value
+            await self?.finished(url, task)
+        }
+        return task
+    }
+
+    private func finished(_ url: URL, _ task: Task<UIImage?, Never>) {
+        if inflight[url]?.task == task { inflight[url] = nil }
+    }
+
+    /// 显示请求离屏：没人再等这张图（也不是预取）就取消下载
+    private func leave(_ url: URL, _ task: Task<UIImage?, Never>) {
+        guard var entry = inflight[url], entry.task == task else { return }
+        entry.consumers -= 1
+        if entry.consumers <= 0, !entry.prefetched {
+            task.cancel()
+            inflight[url] = nil
+        } else {
+            inflight[url] = entry
+        }
+    }
+
+    private static func downsample(file url: URL, maxPixel: CGFloat) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        return thumbnail(source, maxPixel: maxPixel)
     }
 
     private static func downsample(_ data: Data, maxPixel: CGFloat) -> UIImage? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else { return nil }
+        return thumbnail(source, maxPixel: maxPixel)
+    }
+
+    private static func thumbnail(_ source: CGImageSource, maxPixel: CGFloat) -> UIImage? {
         let options = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -127,7 +217,8 @@ struct RemoteImage: View {
             .task(id: request) {
                 guard let request, memory.image(for: request) == nil else { return }
                 let pixel = CGSize(width: size.width * scale, height: size.height * scale)
-                if let image = await ImagePipeline.shared.image(for: request, maxPixel: max(pixel.width, pixel.height)) {
+                if let image = await ImagePipeline.shared.image(for: request, maxPixel: max(pixel.width, pixel.height)),
+                   !Task.isCancelled {
                     loaded = Loaded(url: request, image: image)
                 }
             }
@@ -143,6 +234,11 @@ struct RemoteImage: View {
     /// 实际请求的地址（服务端按像素裁好）：显示和预取用同一套规则，才能命中同一份缓存
     static func request(_ url: String?, size: CGSize, scale: CGFloat, fill: Bool = true) -> URL? {
         let pixel = CGSize(width: size.width * scale, height: size.height * scale)
+        // 本地文件（离线缓存的封面）：保留原路径，不拼图床的尺寸后缀；尺寸放进片段里，让不同尺寸各有缓存键
+        if let url, url.hasPrefix("file:"), var components = URLComponents(string: url) {
+            components.fragment = "\(Int(pixel.width))x\(Int(pixel.height))"
+            return components.url
+        }
         // 完整显示时只限宽，不让服务端裁切
         return fill ? url?.biliResized(pixel) : url?.biliResized(width: pixel.width)
     }

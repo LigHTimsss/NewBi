@@ -87,8 +87,13 @@ struct SegmentIndex: Sendable {
               let initRange = parseRange(base.initialization),
               let indexRange = parseRange(base.indexRange) else { throw DashError.missingIndex }
         let data = try await MediaFetch.range(stream.urls, 0...indexRange.upperBound)
-        guard data.count > indexRange.upperBound else { throw DashError.badIndex }
-        let segments = try SIDX.parse(data, at: indexRange.lowerBound)
+        return try parse(data, initRange: initRange, indexRange: indexRange)
+    }
+
+    /// init / sidx 范围都来自远端（或本地缓存的记录），切片前逐一核对，不让越界切片终止进程
+    private static func parse(_ data: Data, initRange: ClosedRange<Int>, indexRange: ClosedRange<Int>) throws -> SegmentIndex {
+        guard data.count > indexRange.upperBound, data.count > initRange.upperBound else { throw DashError.badIndex }
+        let segments = try SIDX.parse(data, at: indexRange.lowerBound, end: indexRange.upperBound + 1)
         return SegmentIndex(initData: data.subdata(in: 0..<(initRange.upperBound + 1)), segments: segments)
     }
 
@@ -105,25 +110,34 @@ struct SegmentIndex: Sendable {
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         let data = try handle.read(upToCount: indexRange.upperBound + 1) ?? Data()
-        guard data.count > indexRange.upperBound else { throw DashError.badIndex }
-        let segments = try SIDX.parse(data, at: indexRange.lowerBound)
-        return SegmentIndex(initData: data.subdata(in: 0..<(initRange.upperBound + 1)), segments: segments)
+        return try parse(data, initRange: initRange, indexRange: indexRange)
     }
+
+    /// init + sidx 头部正常不到几十 KB，超过 8 MB 视为异常数据，不去读
+    private static let headerLimit = 8 * 1024 * 1024
 
     private static func parseRange(_ text: String) -> ClosedRange<Int>? {
         let parts = text.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 2, parts[0] <= parts[1] else { return nil }
+        guard parts.count == 2, parts[0] >= 0, parts[0] <= parts[1], parts[1] < headerLimit else { return nil }
         return parts[0]...parts[1]
     }
 }
 
-/// ISO/IEC 14496-12 Segment Index Box
+/// ISO/IEC 14496-12 Segment Index Box。所有字段都来自网络或本地文件，按不可信输入处理：
+/// 版本、盒长、偏移逐项校验，累加用溢出检查，任何异常都抛 badIndex（走降级），不会让进程崩溃
 enum SIDX {
-    static func parse(_ data: Data, at start: Int) throws -> [SegmentIndex.Segment] {
+    /// - Parameters:
+    ///   - start: sidx 盒子在 data 里的起点
+    ///   - end: indexRange 的结束位置（不含），sidx 不能超出
+    static func parse(_ data: Data, at start: Int, end: Int) throws -> [SegmentIndex.Segment] {
+        guard start >= 0, start < end, end <= data.count else { throw DashError.badIndex }
         var reader = BigEndianReader(data: data, offset: start)
         let size = Int(try reader.u32())
         guard try reader.u32() == 0x7369_6478 else { throw DashError.badIndex } // 'sidx'
+        // size == 1（64 位盒长）/ 0（到文件尾）在 sidx 里不会出现，一并拒绝
+        guard size >= 32, size <= end - start else { throw DashError.badIndex }
         let version = try reader.u8()
+        guard version <= 1 else { throw DashError.badIndex }
         try reader.skip(3 + 4) // flags + reference_ID
         let timescale = Double(try reader.u32())
         let firstOffset: Int
@@ -132,11 +146,13 @@ enum SIDX {
             firstOffset = Int(try reader.u32())
         } else {
             try reader.skip(8)
-            firstOffset = Int(try reader.u64())
+            guard let value = Int(exactly: try reader.u64()), value <= Int(Int32.max) else { throw DashError.badIndex }
+            firstOffset = value
         }
         try reader.skip(2)
         let count = Int(try reader.u16())
-        guard timescale > 0, count > 0 else { throw DashError.badIndex }
+        // 每条引用 12 字节，必须完整落在盒子里
+        guard timescale > 0, count > 0, reader.offset + count * 12 <= start + size else { throw DashError.badIndex }
 
         // 偏移以 sidx 盒子之后的第一个字节为基准
         var offset = start + size + firstOffset
@@ -144,11 +160,16 @@ enum SIDX {
         segments.reserveCapacity(count)
         for _ in 0..<count {
             let reference = try reader.u32()
+            // 最高位为 1 表示引用的是下一级 sidx（B 站不会下发），按异常处理
+            guard reference & 0x8000_0000 == 0 else { throw DashError.badIndex }
             let length = Int(reference & 0x7FFF_FFFF)
             let duration = Double(try reader.u32()) / timescale
             try reader.skip(4) // SAP 信息
+            guard length > 0 else { throw DashError.badIndex }
             segments.append(.init(offset: offset, length: length, duration: duration))
-            offset += length
+            let (next, overflow) = offset.addingReportingOverflow(length)
+            guard !overflow else { throw DashError.badIndex }
+            offset = next
         }
         return segments
     }
@@ -164,12 +185,12 @@ private struct BigEndianReader {
     mutating func u64() throws -> UInt64 { try read(8) }
 
     mutating func skip(_ count: Int) throws {
-        guard offset + count <= data.count else { throw DashError.badIndex }
+        guard count >= 0, count <= data.count - offset else { throw DashError.badIndex }
         offset += count
     }
 
     private mutating func read(_ count: Int) throws -> UInt64 {
-        guard offset + count <= data.count else { throw DashError.badIndex }
+        guard offset >= 0, count <= data.count - offset else { throw DashError.badIndex }
         var value: UInt64 = 0
         for index in 0..<count {
             value = value << 8 | UInt64(data[data.startIndex + offset + index])

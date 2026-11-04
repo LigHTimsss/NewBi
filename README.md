@@ -21,12 +21,14 @@ open NewBi.xcodeproj
 
 在 Signing & Capabilities 里选择自己的开发者团队，连接 iPhone 运行。
 
-## 没有 Mac：GitHub Actions 云端编译
+## 没有 Mac：云端编译
 
-每次推送都会在 GitHub 的 macOS 虚拟机（Xcode 26）上自动编译（`.github/workflows/build.yml`）：
+推送提交**不会**自动编译，两个云端入口都要手动触发：
 
-1. 模拟器版编译：查编译错误，完整日志在运行页的 `build-logs` 产物里
-2. 真机 Release 版：打成**未签名**的 `NewBi-unsigned-ipa` 产物（保留 7 天）
+- **Codemagic（日常）**：`codemagic.yaml` 的「未签名 ipa」工作流。在 Codemagic 里选这个仓库和分支，手动 Start new build；产物有 `NewBi-unsigned.ipa`、这次实际解析出的 `Package.resolved` 和完整编译日志（`build-device.log`、`build-toolchain.log` 里记着 Xcode 版本）。每次构建记录都标着对应的提交，按提交号就能找到它的产物。
+  - Xcode 版本在 `codemagic.yaml` 里固定，不跟 latest 漂移；升级时改那里
+  - 依赖锁：把某次构建产物里的 `Package.resolved` 放到 `ci/Package.resolved` 提交，之后的构建只用锁住的确切版本（含 KSPlayer 间接带进来的 FFmpeg 二进制包）
+- **GitHub Actions（备用）**：`.github/workflows/build.yml` 只能手动运行（Actions → Build → Run workflow，可选虚拟机），会先编模拟器版查错，再打未签名 ipa（`NewBi-unsigned-ipa` 产物保留 7 天，日志在 `build-logs`）
 
 未签名的 ipa 需要自签后才能装到 iPhone：用 AltStore / SideStore / 爱思助手等工具配合 Apple ID 签名（免费 Apple ID 签的 7 天后过期，需要重签）。注意免费账号不支持部分能力，实况活动、后台下载等可能受限。
 

@@ -12,7 +12,8 @@ final class AVPlayerEngine: PlaybackEngine {
     private let videoView = VideoLayerView()
     private var pip: AVPictureInPictureController?
     private var statusObservation: NSKeyValueObservation?
-    private var endObserver: NSObjectProtocol?
+    private var displayObservation: NSKeyValueObservation?
+    private var itemObservers: [NSObjectProtocol] = []
     private var fill = false
 
     init() {
@@ -21,6 +22,14 @@ final class AVPlayerEngine: PlaybackEngine {
         if AVPictureInPictureController.isPictureInPictureSupported() {
             pip = AVPictureInPictureController(playerLayer: videoView.playerLayer)
             pip?.canStartPictureInPictureAutomaticallyFromInline = true
+        }
+        // 第一帧可显示：图层换了播放项后会先变回 false，新一项出帧后再变 true
+        // KVO 可能在任意线程回调：回到主线程后按图层「此刻」的状态判断（届时若已换了新一项，它会是 false）
+        displayObservation = videoView.playerLayer.observe(\.isReadyForDisplay, options: [.new]) { @Sendable [weak self] _, _ in
+            Task { @MainActor in
+                guard let self, self.player.currentItem != nil, self.videoView.playerLayer.isReadyForDisplay else { return }
+                self.onEvent?(.firstFrame)
+            }
         }
     }
 
@@ -58,21 +67,38 @@ final class AVPlayerEngine: PlaybackEngine {
         let asset = headers.map { AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": $0]) } ?? AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 20 // 限制预缓冲，控制内存
-        statusObservation = item.observe(\.status) { [weak self] item, _ in
+        removeItemObservers()
+        // 回调跳回主线程时可能已经换了播放项：只认仍是当前项的事件（按对象身份比较，不跨线程传递播放项本身）
+        let itemID = ObjectIdentifier(item)
+        statusObservation = item.observe(\.status) { @Sendable [weak self] item, _ in
             let status = item.status
             let error = item.error
             Task { @MainActor in
+                guard let self, self.isCurrent(itemID) else { return }
                 switch status {
-                case .readyToPlay: self?.onEvent?(.ready)
-                case .failed: self?.onEvent?(.failed(error))
+                case .readyToPlay: self.onEvent?(.ready)
+                case .failed: self.onEvent?(.failed(error))
                 default: break
                 }
             }
         }
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-        endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.onEvent?(.ended) }
-        }
+        let center = NotificationCenter.default
+        itemObservers = [
+            center.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.isCurrent(itemID) else { return }
+                    self.onEvent?(.ended)
+                }
+            },
+            // 播放中途失败（网络中断、分段 5xx）有时只发这个通知、status 不变，也要进入恢复链
+            center.addObserver(forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: item, queue: .main) { [weak self] note in
+                let error = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+                MainActor.assumeIsolated {
+                    guard let self, self.isCurrent(itemID) else { return }
+                    self.onEvent?(.failed(error))
+                }
+            },
+        ]
         player.replaceCurrentItem(with: item)
         if let startAt, startAt > 0 {
             player.seek(to: CMTime(seconds: startAt, preferredTimescale: 600))
@@ -102,11 +128,19 @@ final class AVPlayerEngine: PlaybackEngine {
     }
 
     func teardown() {
-        statusObservation = nil
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-        endObserver = nil
+        removeItemObservers()
         player.pause()
         player.replaceCurrentItem(with: nil)
+    }
+
+    private func isCurrent(_ itemID: ObjectIdentifier) -> Bool {
+        player.currentItem.map(ObjectIdentifier.init) == itemID
+    }
+
+    private func removeItemObservers() {
+        statusObservation = nil
+        for observer in itemObservers { NotificationCenter.default.removeObserver(observer) }
+        itemObservers = []
     }
 }
 

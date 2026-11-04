@@ -24,9 +24,27 @@ final class DynamicModel {
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     /// 非 nil 时只看这个 UP 主的动态（空间页「动态」Tab），不需要登录
     let hostMid: Int?
+    /// 关注流属于哪个账号。换账号 / 退出时整份清空，迟到的旧账号响应按 epoch 丢弃
+    private(set) var owner: Int?
+    @ObservationIgnored private var epoch = 0
 
     init(hostMid: Int? = nil) {
         self.hostMid = hostMid
+    }
+
+    /// 换了账号（或退出）：清掉上一个账号的列表、关注 UP 主条、点赞覆盖，取消在途请求
+    func reset(owner: Int?) {
+        self.owner = owner
+        epoch += 1
+        loadTask?.cancel()
+        loadTask = nil
+        items = []
+        ups = []
+        likeOverrides = [:]
+        offset = ""
+        hasMore = true
+        isLoading = false
+        error = nil
     }
 
     func refresh() async {
@@ -35,10 +53,13 @@ final class DynamicModel {
             await loadTask?.value
             return
         }
+        let epoch = epoch
         async let portal = try? BiliClient.shared.get(.dynamicPortal, as: DynamicPortal.self)
         load(reset: true)
         await loadTask?.value
-        if let list = await portal?.upList?.items { ups = list }
+        let list = await portal?.upList?.items
+        guard epoch == self.epoch else { return }
+        if let list { ups = list }
     }
 
     func loadIfNeeded() {
@@ -59,23 +80,25 @@ final class DynamicModel {
         }
         guard !isLoading, hasMore else { return }
         isLoading = true
-        let type = filter.type, offset = offset, hostMid = hostMid
+        let type = filter.type, offset = offset, hostMid = hostMid, epoch = epoch, owner = owner
         loadTask = Task {
             do {
                 let endpoint: Endpoint = hostMid.map { .spaceDynamic(mid: $0, offset: offset) } ?? .dynamicFeed(type: type, offset: offset)
                 let feed = try await BiliClient.shared.get(endpoint, as: DynamicFeed.self)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, epoch == self.epoch else { return }
                 let known = reset ? [] : Set(items.map(\.id))
                 let fresh = (feed.items ?? []).filter { !known.contains($0.id) }
                 items = reset ? fresh : items + fresh
+                // 整页重新拉到了：点赞状态以服务器为准
+                if reset { likeOverrides = [:] }
                 self.offset = feed.offset ?? ""
                 hasMore = (feed.hasMore ?? false) && !self.offset.isEmpty
-                if reset, hostMid == nil, type == "all", let baseline = feed.updateBaseline {
-                    DynamicBadge.shared.markSeen(baseline: baseline)
+                if reset, hostMid == nil, type == "all", let owner, let baseline = feed.updateBaseline {
+                    DynamicBadge.shared.markSeen(baseline: baseline, mid: owner)
                 }
                 error = nil
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, epoch == self.epoch else { return }
                 self.error = error.localizedDescription
             }
             isLoading = false
@@ -110,32 +133,42 @@ final class DynamicModel {
     func toggleLike(_ item: DynamicItem) async throws {
         guard let csrf = BiliClient.csrfToken else { throw BiliError.api(code: -101, message: "登录后才能点赞") }
         let target = !isLiked(item)
+        let epoch = epoch
         likeOverrides[item.id] = target
         do {
             try await BiliClient.shared.postJSON(.dynamicThumb(csrf: csrf), body: ThumbBody(dynIDStr: item.id, up: target ? 1 : 2, spmid: "333.1365.0.0"))
         } catch {
-            likeOverrides[item.id] = !target
+            // 期间换了账号：覆盖值已经清空，不再回滚到新账号身上
+            if epoch == self.epoch { likeOverrides[item.id] = !target }
             throw error
         }
     }
 }
 
-/// 底栏「动态」红点：记住上次看到的 baseline，回到前台时查一次有没有新动态
+/// 底栏「动态」红点：按账号记住上次看到的 baseline，回到前台时查一次有没有新动态
 @MainActor
 @Observable
 final class DynamicBadge {
     static let shared = DynamicBadge()
     private(set) var hasNew = false
-    private static let key = "dynamicBaseline"
+    /// 正在为哪个账号查：换账号后旧账号的结果不再写进来
+    @ObservationIgnored private var current: Int?
 
-    func markSeen(baseline: String) {
-        UserDefaults.standard.set(baseline, forKey: Self.key)
-        hasNew = false
+    private static func key(_ mid: Int) -> String { "dynamicBaseline.\(mid)" }
+
+    func markSeen(baseline: String, mid: Int) {
+        UserDefaults.standard.set(baseline, forKey: Self.key(mid))
+        if current == mid { hasNew = false }
     }
 
-    func check() async {
-        guard BiliClient.csrfToken != nil, let baseline = UserDefaults.standard.string(forKey: Self.key),
-              let update = try? await BiliClient.shared.get(.dynamicUpdate(baseline: baseline), as: DynamicUpdate.self) else { return }
+    func check(mid: Int?) async {
+        if current != mid {
+            current = mid
+            hasNew = false
+        }
+        guard let mid, BiliClient.csrfToken != nil, let baseline = UserDefaults.standard.string(forKey: Self.key(mid)),
+              let update = try? await BiliClient.shared.get(.dynamicUpdate(baseline: baseline), as: DynamicUpdate.self),
+              current == mid else { return }
         hasNew = update.updateNum > 0
     }
 }
@@ -154,7 +187,12 @@ struct DynamicView: View {
     var body: some View {
         Group {
             if session.isLoggedIn {
-                feed
+                if model.owner == session.mid {
+                    feed
+                } else {
+                    // 刚换账号、上一个账号的列表还没清掉的那一帧：不画旧内容
+                    Color.clear
+                }
             } else {
                 VStack(alignment: .leading) {
                     title.padding(.horizontal, 20)
@@ -166,8 +204,10 @@ struct DynamicView: View {
             DynamicCommentSheet(target: target)
         }
         .imageViewer($viewer)
-        .task(id: session.isLoggedIn) {
-            if session.isLoggedIn, model.items.isEmpty { await model.refresh() }
+        // 按账号归属：换账号 / 退出时先清空上一个账号的内容，再为新账号加载（第一帧就不会出现旧账号的动态）
+        .task(id: session.mid) {
+            if model.owner != session.mid { model.reset(owner: session.mid) }
+            if session.mid != nil, model.items.isEmpty { await model.refresh() }
         }
         .onChange(of: refreshToken) {
             guard session.isLoggedIn else { return }

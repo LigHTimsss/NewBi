@@ -7,8 +7,12 @@ enum EngineKind: String, Sendable {
     case ffmpeg = "FFmpeg"
 }
 
+/// 引擎只上报「当前这一项」的事件：被替换掉的旧播放项的回调在引擎里就丢掉
 enum EngineEvent {
+    /// 媒体可以播放（时长等信息已知）
     case ready
+    /// 第一帧画面已经可以显示（系统引擎：AVPlayerLayer.isReadyForDisplay）
+    case firstFrame
     case failed(Error?)
     case ended
 }

@@ -237,7 +237,7 @@ struct LoginView: View {
         .onChange(of: model.phase) { _, phase in
             guard phase == .success else { return }
             Task {
-                await session.refresh()
+                await session.didLogin()
                 dismiss()
             }
         }
