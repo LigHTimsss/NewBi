@@ -147,6 +147,14 @@ struct CommentRow: View {
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
+    private var links: RichText.Links {
+        var links = reply.content.links
+        links.timestamps = model.type == 1
+        // 半屏面板里不跳空间：去掉 @ 的链接，只保留高亮外的其它链接
+        if !linksToSpace { links.mentions = [:] }
+        return links
+    }
+
     var body: some View {
         let liked = model.isLiked(reply)
         HStack(alignment: .top, spacing: 12) {
@@ -171,7 +179,8 @@ struct CommentRow: View {
                     }
                 }
 
-                RichText(reply.content.message, emotes: reply.content.emoteURLs)
+                // @提及、关键词、网址、BV 号可点；视频评论里的时间点点了跳到该位置
+                RichText(reply.content.message, emotes: reply.content.emoteURLs, links: links)
                     .textSelection(.enabled)
 
                 if let pictures = reply.content.pictures, !pictures.isEmpty {

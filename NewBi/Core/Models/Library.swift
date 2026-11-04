@@ -155,9 +155,15 @@ struct FavFolder: Decodable, Identifiable, Hashable, Sendable {
     let mediaCount: Int
     /// list-all 带 rid 查询时：1 表示该视频已在此收藏夹
     let favState: Int?
+    /// 属性位：bit0 私密，bit1 非默认收藏夹（默认收藏夹为 0，不能删除）
+    let attr: Int?
+    let intro: String?
+
+    var isPrivate: Bool { (attr ?? 0) & 1 == 1 }
+    var isDefault: Bool { (attr ?? 0) & 2 == 0 }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, cover
+        case id, title, cover, attr, intro
         case mediaCount = "media_count"
         case favState = "fav_state"
     }

@@ -41,6 +41,15 @@ final class FavoritesModel {
 struct FavoritesView: View {
     @Environment(SessionStore.self) private var session
     @State private var model = FavoritesModel()
+    @State private var editing: FolderEditTarget?
+    @State private var deleting: FavFolder?
+    @State private var toast: String?
+
+    /// 新建（nil）或编辑某个收藏夹
+    private struct FolderEditTarget: Identifiable {
+        let folder: FavFolder?
+        var id: Int { folder?.id ?? 0 }
+    }
 
     var body: some View {
         Group {
@@ -54,9 +63,47 @@ struct FavoritesView: View {
         .navigationTitle("我的收藏")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            if session.isLoggedIn {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { editing = FolderEditTarget(folder: nil) } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("新建收藏夹")
+                }
+            }
+        }
+        .sheet(item: $editing) { target in
+            FolderEditor(folder: target.folder) { _ in
+                toast = target.folder == nil ? "已新建收藏夹" : "已保存"
+                reload()
+            }
+        }
+        .confirmationDialog("删除收藏夹「\(deleting?.title ?? "")」？", isPresented: Binding(
+            get: { deleting != nil }, set: { if !$0 { deleting = nil } }
+        ), titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                guard let folder = deleting else { return }
+                Task {
+                    do {
+                        try await FavFolders.delete(id: folder.id)
+                        toast = "已删除"
+                        reload()
+                    } catch {
+                        toast = error.localizedDescription
+                    }
+                }
+            }
+        } message: {
+            Text("收藏夹里的内容会一起移除，不能恢复")
+        }
+        .toast($toast)
         .task(id: session.user?.mid) {
             if let mid = session.user?.mid, model.folders.isEmpty { await model.refresh(mid: mid) }
         }
+    }
+
+    private func reload() {
+        guard let mid = session.user?.mid else { return }
+        Task { await model.refresh(mid: mid) }
     }
 
     private func grid(mid: Int) -> some View {
@@ -67,6 +114,16 @@ struct FavoritesView: View {
                         FolderCard(folder: folder)
                     }
                     .buttonStyle(PressableStyle())
+                    .contextMenu {
+                        Button { editing = FolderEditTarget(folder: folder) } label: {
+                            Label("编辑", systemImage: "pencil")
+                        }
+                        if !folder.isDefault {
+                            Button(role: .destructive) { deleting = folder } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                        }
+                    }
                     .riseIn(index: index)
                     .onAppear { Task { await model.loadMore(mid: mid, after: folder) } }
                 }
@@ -92,7 +149,7 @@ struct FavoritesView: View {
     }
 }
 
-private struct FolderCard: View {
+struct FolderCard: View {
     let folder: FavFolder
 
     var body: some View {
@@ -121,10 +178,18 @@ private struct FolderCard: View {
             }
             .clipShape(.rect(cornerRadius: 12))
 
-            Text(folder.title)
-                .font(.system(size: 14, weight: .medium))
-                .lineLimit(1)
-                .foregroundStyle(.primary)
+            HStack(spacing: 4) {
+                if folder.isPrivate {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.secondaryText)
+                        .accessibilityLabel("私密")
+                }
+                Text(folder.title)
+                    .font(.system(size: 14, weight: .medium))
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+            }
             Text("\(folder.mediaCount) 个内容")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondaryText)

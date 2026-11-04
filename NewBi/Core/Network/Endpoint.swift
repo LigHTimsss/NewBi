@@ -120,6 +120,13 @@ extension Endpoint {
         ])
     }
 
+    /// 某个 UP 主的动态（空间页「动态」Tab）
+    static func spaceDynamic(mid: Int, offset: String) -> Endpoint {
+        Endpoint(path: "/x/polymer/web-dynamic/v1/feed/space", query: [
+            "host_mid": "\(mid)", "offset": offset, "features": "itemOpusStyle", "timezone_offset": "-480",
+        ], signed: true)
+    }
+
     /// 最近有更新的关注 UP 主（头像条）
     static let dynamicPortal = Endpoint(path: "/x/polymer/web-dynamic/v1/portal")
 
@@ -184,8 +191,35 @@ extension Endpoint {
 
     /// 加入 / 移出收藏夹（POST，add_media_ids / del_media_ids 逗号分隔）
     static let favDeal = Endpoint(path: "/x/v3/fav/resource/deal")
+    /// 新建收藏夹（POST，title、intro、privacy=0 公开 / 1 私密），返回新收藏夹
+    static let favFolderAdd = Endpoint(path: "/x/v3/fav/folder/add")
+    /// 修改收藏夹（POST，media_id、title、intro、privacy）
+    static let favFolderEdit = Endpoint(path: "/x/v3/fav/folder/edit")
+    /// 删除收藏夹（POST，media_ids 逗号分隔；默认收藏夹不能删）
+    static let favFolderDelete = Endpoint(path: "/x/v3/fav/folder/del")
 
     // MARK: UP 主空间
+
+    /// 合集与系列（空间页「合集」Tab），每项带前几个视频
+    static func spaceSeasons(mid: Int, page: Int) -> Endpoint {
+        Endpoint(path: "/x/polymer/web-space/seasons_series_list", query: [
+            "mid": "\(mid)", "page_num": "\(page)", "page_size": "20",
+        ], signed: true)
+    }
+
+    /// 合集里的视频
+    static func seasonArchives(mid: Int, seasonID: Int, page: Int) -> Endpoint {
+        Endpoint(path: "/x/polymer/web-space/seasons_archives_list", query: [
+            "mid": "\(mid)", "season_id": "\(seasonID)", "sort_reverse": "false", "page_num": "\(page)", "page_size": "30",
+        ])
+    }
+
+    /// 系列里的视频（老版「列表」）
+    static func seriesArchives(mid: Int, seriesID: Int, page: Int) -> Endpoint {
+        Endpoint(path: "/x/series/archives", query: [
+            "mid": "\(mid)", "series_id": "\(seriesID)", "only_normal": "true", "sort": "desc", "pn": "\(page)", "ps": "30",
+        ])
+    }
 
     /// 名片：头像、签名、认证、粉丝 / 关注 / 获赞、头图、是否已关注（不需要 WBI，风控较松）
     static func spaceCard(mid: Int) -> Endpoint {

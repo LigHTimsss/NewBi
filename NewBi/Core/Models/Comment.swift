@@ -42,12 +42,36 @@ struct Reply: Decodable, Identifiable, Sendable {
             }
         }
 
+        /// 正文里被 B 站识别成链接的关键词（视频标题、搜索词等）
+        struct Jump: Decodable, Sendable {
+            let title: String?
+            let pcURL: String?
+
+            private enum CodingKeys: String, CodingKey {
+                case title
+                case pcURL = "pc_url"
+            }
+        }
+
         let message: String
         let emote: [String: Emote]?
         let pictures: [Picture]?
+        /// "@名字" 里的名字 → mid
+        let atNameToMid: [String: Int]?
+        let jumpURL: [String: Jump]?
+
+        private enum CodingKeys: String, CodingKey {
+            case message, emote, pictures
+            case atNameToMid = "at_name_to_mid"
+            case jumpURL = "jump_url"
+        }
 
         /// "[doge]" → 图片地址
         var emoteURLs: [String: String] { emote?.mapValues(\.url) ?? [:] }
+
+        var links: RichText.Links {
+            RichText.Links(mentions: atNameToMid ?? [:], jumps: jumpURL?.compactMapValues(\.pcURL) ?? [:])
+        }
     }
 
     struct Control: Decodable, Sendable {

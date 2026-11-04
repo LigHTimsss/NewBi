@@ -13,6 +13,7 @@ struct FavoriteSheet: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var error: String?
+    @State private var creating = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
@@ -20,6 +21,14 @@ struct FavoriteSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                if !isLoading {
+                    Button { creating = true } label: {
+                        Label("新建收藏夹", systemImage: "plus.circle")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(accent.accentText(scheme))
+                            .frame(minHeight: 44)
+                    }
+                }
                 ForEach(folders) { folder in
                     let on = selected.contains(folder.id)
                     Button {
@@ -29,7 +38,12 @@ struct FavoriteSheet: View {
                     } label: {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(folder.title).font(.system(size: 16)).foregroundStyle(.primary)
+                                HStack(spacing: 4) {
+                                    Text(folder.title).font(.system(size: 16)).foregroundStyle(.primary)
+                                    if folder.isPrivate {
+                                        Image(systemName: "lock.fill").font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
+                                    }
+                                }
                                 Text("\(folder.mediaCount) 个内容").font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
                             }
                             Spacer()
@@ -66,16 +80,26 @@ struct FavoriteSheet: View {
         .presentationDetents([.medium, .large])
         .sensoryFeedback(.selection, trigger: selected)
         .task { await load() }
+        // 新建后刷新列表并自动勾上新收藏夹，已有的勾选保留
+        .sheet(isPresented: $creating) {
+            FolderEditor { newID in
+                Task { await load(selecting: newID) }
+            }
+        }
     }
 
-    private func load() async {
+    private func load(selecting newID: Int? = nil) async {
         defer { isLoading = false }
         do {
             let result = try await BiliClient.shared.get(.favFoldersForVideo(mid: mid, aid: aid), as: FavFolderPage.self)
             folders = result.list ?? []
             original = Set(folders.filter { $0.favState == 1 }.map(\.id))
-            // 还没收藏过时默认勾选第一个（默认收藏夹），与 B 站一致
-            selected = original.isEmpty ? Set(folders.prefix(1).map(\.id)) : original
+            if let newID {
+                withAnimation(Motion.micro) { _ = selected.insert(newID) }
+            } else {
+                // 还没收藏过时默认勾选第一个（默认收藏夹），与 B 站一致
+                selected = original.isEmpty ? Set(folders.prefix(1).map(\.id)) : original
+            }
         } catch {
             self.error = error.localizedDescription
         }

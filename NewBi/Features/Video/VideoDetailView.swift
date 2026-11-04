@@ -5,8 +5,8 @@ import SwiftUI
 final class VideoDetailModel {
     let card: VideoCard
     let player = PlayerController()
-    /// 卡片 id 即 aid，评论不必等详情返回
-    let comments: CommentModel
+    /// 卡片 id 即 aid，评论不必等详情返回；只有 BV 号时（评论里的链接）等详情拿到 aid 再建
+    private(set) var comments: CommentModel
     private(set) var detail: VideoDetail?
     private(set) var related: [VideoCard] = []
     private(set) var onlineText: String?
@@ -43,6 +43,7 @@ final class VideoDetailModel {
         do {
             let detail = try await BiliClient.shared.get(.view(bvid: card.bvid), as: VideoDetail.self)
             self.detail = detail
+            if card.id == 0 { comments = CommentModel(oid: detail.aid) }
             let relation = RelationModel(mid: detail.owner.mid)
             self.relation = relation
 
@@ -197,6 +198,7 @@ struct VideoDetailView: View {
     @State private var locked = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var parentOpenURL
     @AppStorage("backgroundPlay") private var backgroundPlay = true
 
     var body: some View {
@@ -245,6 +247,17 @@ struct VideoDetailView: View {
             if isFullscreen { Orientation.lock(.portrait) }
         }
         .toast(Binding(get: { model?.resumeHint }, set: { model?.resumeHint = $0 }), bottomPadding: 40)
+        // 评论里的时间点：跳到该位置并继续播放；其它链接交回上层
+        .environment(\.openURL, OpenURLAction { url in
+            if case .seek(let seconds) = AppLink.parse(url), let model {
+                model.player.seek(seconds: Double(seconds))
+                model.player.play()
+                model.resumeHint = "已跳到 \(seconds.durationText)"
+                return .handled
+            }
+            parentOpenURL(url)
+            return .handled
+        })
         // 横过手机自动进入全屏，竖回来退出（锁屏时不跟随）
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             followDeviceOrientation()

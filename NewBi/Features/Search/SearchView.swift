@@ -8,7 +8,7 @@ final class SearchModel {
     }
 
     enum Kind: String, CaseIterable {
-        case video = "视频", user = "UP主"
+        case video = "视频", bangumi = "番剧", live = "直播", user = "UP主"
     }
 
     enum Order: String, CaseIterable {
@@ -38,6 +38,8 @@ final class SearchModel {
     private(set) var history: [String]
     private(set) var videos: [SearchVideo] = []
     private(set) var users: [SearchUser] = []
+    private(set) var medias: [SearchMedia] = []
+    private(set) var lives: [SearchLive] = []
     private(set) var isLoading = false
     private(set) var error: String?
 
@@ -94,9 +96,23 @@ final class SearchModel {
     }
 
     func loadMore(after id: Int) {
-        let lastID = kind == .video ? videos.last?.id : users.last?.id
+        let lastID = switch kind {
+        case .video: videos.last?.id
+        case .bangumi: medias.last?.id
+        case .live: lives.last?.id
+        case .user: users.last?.id
+        }
         guard id == lastID else { return }
         startLoad(reset: false)
+    }
+
+    var isEmpty: Bool {
+        switch kind {
+        case .video: videos.isEmpty
+        case .bangumi: medias.isEmpty
+        case .live: lives.isEmpty
+        case .user: users.isEmpty
+        }
     }
 
     func retry() {
@@ -123,6 +139,8 @@ final class SearchModel {
             pages = 1
             videos = []
             users = []
+            medias = []
+            lives = []
             error = nil
             isLoading = false
         }
@@ -149,6 +167,30 @@ final class SearchModel {
                     guard !Task.isCancelled else { return }
                     let known = Set(users.map(\.id))
                     users += (result.result ?? []).filter { !known.contains($0.id) }
+                    pages = result.numPages ?? 1
+                case .bangumi:
+                    // 番剧和影视分两个接口，第一页一起查、合并展示
+                    async let anime = BiliClient.shared.get(
+                        .search(keyword: keyword, type: "media_bangumi", page: page, order: nil), as: SearchResult<SearchMedia>.self
+                    )
+                    async let film = try? BiliClient.shared.get(
+                        .search(keyword: keyword, type: "media_ft", page: page, order: nil), as: SearchResult<SearchMedia>.self
+                    )
+                    let first = try await anime, second = await film
+                    guard !Task.isCancelled else { return }
+                    let known = Set(medias.map(\.id))
+                    medias += ((first.result ?? []) + (second?.result ?? [])).filter { !known.contains($0.id) }
+                    pages = max(first.numPages ?? 1, second?.numPages ?? 1)
+                case .live:
+                    let result = try await BiliClient.shared.get(
+                        .search(keyword: keyword, type: "live_room", page: page, order: nil),
+                        as: SearchResult<SearchLive>.self
+                    )
+                    guard !Task.isCancelled else { return }
+                    let known = Set(lives.map(\.id))
+                    // 正在直播的排前面
+                    let fresh = (result.result ?? []).filter { !known.contains($0.id) }
+                    lives += fresh.filter(\.isLive) + fresh.filter { !$0.isLive }
                     pages = result.numPages ?? 1
                 }
                 self.page = page + 1
@@ -372,6 +414,20 @@ private struct SearchResults: View {
                                 .riseIn(index: index)
                                 .onAppear { model.loadMore(after: user.id) }
                         }
+                    case .bangumi:
+                        ForEach(Array(model.medias.enumerated()), id: \.element.id) { index, media in
+                            MediaRow(media: media, title: BiliHTML.highlighted(media.titleHTML, color: accent.accentText(scheme)))
+                                .riseIn(index: index)
+                                .onAppear { model.loadMore(after: media.id) }
+                        }
+                    case .live:
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 14) {
+                            ForEach(Array(model.lives.enumerated()), id: \.element.id) { index, live in
+                                LiveCell(live: live, title: BiliHTML.highlighted(live.titleHTML, color: accent.accentText(scheme)))
+                                    .riseIn(index: index)
+                                    .onAppear { model.loadMore(after: live.id) }
+                            }
+                        }
                     }
                     footer
                 } header: {
@@ -389,7 +445,7 @@ private struct SearchResults: View {
         @Bindable var search = search
         return VStack(spacing: 10) {
             GlassSegmented(options: SearchModel.Kind.allCases, selection: $search.kind, title: \.rawValue)
-                .frame(maxWidth: 220)
+                .frame(maxWidth: 320)
             if model.kind == .video {
                 HStack(spacing: 4) {
                     ForEach(SearchModel.Order.allCases, id: \.self) { order in
@@ -419,7 +475,7 @@ private struct SearchResults: View {
 
     @ViewBuilder
     private var footer: some View {
-        let isEmpty = model.kind == .video ? model.videos.isEmpty : model.users.isEmpty
+        let isEmpty = model.isEmpty
         if model.isLoading {
             ProgressView().frame(maxWidth: .infinity).padding()
         } else if let error = model.error {
@@ -439,6 +495,134 @@ private struct SearchResults: View {
                 .frame(maxWidth: .infinity)
                 .padding()
         }
+    }
+}
+
+/// 番剧 / 影视：竖版封面 + 评分 + 类型地区；暂由 B 站页面播放（会唤起官方 App，未安装时打开网页）
+private struct MediaRow: View {
+    let media: SearchMedia
+    let title: AttributedString
+    @Environment(\.openURL) private var openURL
+    @Environment(\.accent) private var accent
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button {
+            if let url = media.webURL { openURL(url) }
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                RemoteImage(url: media.cover, size: CGSize(width: 90, height: 120))
+                    .frame(width: 90, height: 120)
+                    .overlay(alignment: .topLeading) {
+                        Text(media.typeName)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .frame(height: 16)
+                            .background(accent.accentFill, in: .rect(cornerRadius: 4))
+                            .padding(5)
+                    }
+                    .clipShape(.rect(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .foregroundStyle(.primary)
+                    Text([media.areas, media.styles].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(1)
+                    Text(meta)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                    Spacer(minLength: 0)
+                    HStack(spacing: 4) {
+                        if let score = media.score?.score, score > 0 {
+                            Text(score.formatted(.number.precision(.fractionLength(1))))
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundStyle(accent.accentText(scheme))
+                            if let count = media.score?.userCount {
+                                Text("\(count.biliCount)人评").font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
+                            }
+                        }
+                        Spacer()
+                        Label("外部打开", systemImage: "arrow.up.forward.app")
+                            .labelStyle(CompactLabelStyle())
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: 120)
+            .contentShape(.rect)
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityHint("在 B 站打开")
+    }
+
+    private var meta: String {
+        let year = media.pubtime > 0 ? Date(timeIntervalSince1970: TimeInterval(media.pubtime)).formatted(.dateTime.year()) : ""
+        let eps = media.episodes > 0 ? "全 \(media.episodes) 话" : ""
+        return [year, eps].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+}
+
+/// 直播间：16:9 封面、在线人数、分区；未开播的变灰
+private struct LiveCell: View {
+    let live: SearchLive
+    let title: AttributedString
+    @Environment(\.openURL) private var openURL
+    @Environment(\.accent) private var accent
+
+    var body: some View {
+        Button {
+            if let url = live.webURL { openURL(url) }
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                RemoteImage(url: live.cover, size: CGSize(width: 180, height: 101))
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .overlay(alignment: .topLeading) {
+                        HStack(spacing: 3) {
+                            if live.isLive {
+                                Circle().fill(.white).frame(width: 5, height: 5)
+                                    .phaseAnimator([1.0, 0.3]) { $0.opacity($1) } animation: { _ in .easeInOut(duration: 0.8) }
+                            }
+                            Text(live.isLive ? "直播中" : "未开播")
+                        }
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .frame(height: 18)
+                        .background(live.isLive ? AnyShapeStyle(accent.accentFill) : AnyShapeStyle(.black.opacity(0.5)), in: .capsule)
+                        .padding(6)
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if live.isLive {
+                            Label(live.online.biliCount, systemImage: "person.fill")
+                                .labelStyle(CompactLabelStyle())
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white)
+                                .shadow(radius: 2)
+                                .padding(6)
+                        }
+                    }
+                    .clipShape(.rect(cornerRadius: 10))
+                    .saturation(live.isLive ? 1 : 0.2)
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                Text("\(live.uname)\(live.area.isEmpty ? "" : " · \(live.area)")")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(1)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityHint("在 B 站打开直播间")
     }
 }
 

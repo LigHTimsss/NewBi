@@ -2,7 +2,19 @@ import SwiftUI
 
 /// 评论正文：文字与 B 站表情（`[doge]`）图文混排。
 /// 表情图走 ImagePipeline（服务端缩放 + 内存缓存），同一表情全局只下载一次。
+/// 另外把 @提及、B 站识别的关键词、网址、BV 号、时间点（05:12）做成可点的强调色链接，
+/// 点击走 `AppLink` 的内部地址，由上层的 openURL 处理（进空间、打开视频、跳到时间点）。
 struct RichText: View {
+    /// 正文里的可点内容
+    struct Links: Sendable {
+        /// "@名字" 里的名字 → mid
+        var mentions: [String: Int] = [:]
+        /// 关键词 → 网址
+        var jumps: [String: String] = [:]
+        /// 视频评论里把 05:12 这样的时间点做成「跳到该位置」
+        var timestamps = false
+    }
+
     private enum Segment {
         case text(String)
         case emote(String)
@@ -10,21 +22,26 @@ struct RichText: View {
 
     private let segments: [Segment]
     private let emotes: [String: String]
+    private let links: Links
     private let size: CGFloat
     @State private var images: [String: UIImage] = [:]
     @Environment(\.displayScale) private var scale
+    @Environment(\.accent) private var accent
+    @Environment(\.colorScheme) private var scheme
 
-    init(_ message: String, emotes: [String: String], size: CGFloat = 15) {
+    init(_ message: String, emotes: [String: String], links: Links = Links(), size: CGFloat = 15) {
         self.emotes = emotes
+        self.links = links
         self.size = size
         segments = Self.parse(message, keys: Set(emotes.keys))
     }
 
     var body: some View {
-        segments.reduce(Text(verbatim: "")) { (partial: Text, segment: Segment) -> Text in
+        let linkColor = accent.accentText(scheme)
+        return segments.reduce(Text(verbatim: "")) { (partial: Text, segment: Segment) -> Text in
             switch segment {
             case .text(let text):
-                Text("\(partial)\(Text(verbatim: text))")
+                Text("\(partial)\(Text(Self.linkify(text, links: links, color: linkColor)))")
             case .emote(let key):
                 if let image = images[key] {
                     Text("\(partial)\(Text(Image(uiImage: image)).baselineOffset(-size * 0.22))")
@@ -58,6 +75,56 @@ struct RichText: View {
         }
     }
 
+    /// 把一段纯文字里的可点内容变成带 link 的 AttributedString（按出现位置从左到右，不重叠）
+    static func linkify(_ text: String, links: Links, color: Color) -> AttributedString {
+        var matches: [(range: Range<String.Index>, url: URL)] = []
+        func add(_ range: Range<String.Index>, _ url: URL?) {
+            guard let url, !matches.contains(where: { $0.range.overlaps(range) }) else { return }
+            matches.append((range, url))
+        }
+        // @提及：只认服务器给了 mid 的名字
+        for (name, mid) in links.mentions {
+            var start = text.startIndex
+            while let range = text.range(of: "@" + name, range: start..<text.endIndex) {
+                add(range, AppLink.space(mid))
+                start = range.upperBound
+            }
+        }
+        // 网址到空白或中文标点为止
+        for match in text.matches(of: /https?:\/\/[^\s，。！？、；）)】」]+/) {
+            add(match.range, AppLink.web(String(text[match.range])))
+        }
+        for match in text.matches(of: /BV[0-9A-Za-z]{10}/) {
+            add(match.range, AppLink.video(String(text[match.range])))
+        }
+        if links.timestamps {
+            for match in text.matches(of: /\b(?:(\d{1,2}):)?([0-5]?\d):([0-5]\d)\b/) {
+                let hours = match.output.1.flatMap { Int($0) } ?? 0
+                let seconds = hours * 3600 + (Int(match.output.2) ?? 0) * 60 + (Int(match.output.3) ?? 0)
+                add(match.range, AppLink.seek(seconds))
+            }
+        }
+        // B 站识别的关键词放最后：与上面重叠时让位
+        for (keyword, target) in links.jumps where !keyword.isEmpty {
+            if let range = text.range(of: keyword) { add(range, AppLink.web(target)) }
+        }
+
+        guard !matches.isEmpty else { return AttributedString(text) }
+        matches.sort { $0.range.lowerBound < $1.range.lowerBound }
+        var result = AttributedString()
+        var cursor = text.startIndex
+        for (range, url) in matches {
+            if cursor < range.lowerBound { result += AttributedString(String(text[cursor..<range.lowerBound])) }
+            var piece = AttributedString(String(text[range]))
+            piece.link = url
+            piece.foregroundColor = color
+            result += piece
+            cursor = range.upperBound
+        }
+        if cursor < text.endIndex { result += AttributedString(String(text[cursor...])) }
+        return result
+    }
+
     private static func parse(_ message: String, keys: Set<String>) -> [Segment] {
         guard !keys.isEmpty else { return [.text(message)] }
         var result: [Segment] = []
@@ -74,6 +141,42 @@ struct RichText: View {
         }
         if !rest.isEmpty { result.append(.text(String(rest))) }
         return result
+    }
+}
+
+/// App 内部链接：评论 / 动态正文里的可点内容统一编码成 newbi:// 地址，
+/// RootView 的 openURL 解析后导航；外部网址里的 B 站视频链接也转成站内打开
+enum AppLink {
+    enum Target: Equatable {
+        case space(Int)
+        case video(String)
+        case seek(Int)
+        case external(URL)
+    }
+
+    static func space(_ mid: Int) -> URL? { URL(string: "newbi://space/\(mid)") }
+    static func video(_ bvid: String) -> URL? { URL(string: "newbi://video/\(bvid)") }
+    static func seek(_ seconds: Int) -> URL? { URL(string: "newbi://seek/\(seconds)") }
+
+    static func web(_ raw: String) -> URL? {
+        guard let url = URL(string: raw.hasPrefix("//") ? "https:" + raw : raw) else { return nil }
+        // bilibili.com/video/BVxxxx、b23.tv 之外的链接照常交给 Safari
+        if let host = url.host(), host.hasSuffix("bilibili.com"),
+           let bvid = url.path().firstMatch(of: /BV[0-9A-Za-z]{10}/) {
+            return video(String(bvid.output))
+        }
+        return url
+    }
+
+    static func parse(_ url: URL) -> Target {
+        guard url.scheme == "newbi", let host = url.host() else { return .external(url) }
+        let value = url.lastPathComponent
+        switch host {
+        case "space": return Int(value).map(Target.space) ?? .external(url)
+        case "video": return .video(value)
+        case "seek": return Int(value).map(Target.seek) ?? .external(url)
+        default: return .external(url)
+        }
     }
 }
 

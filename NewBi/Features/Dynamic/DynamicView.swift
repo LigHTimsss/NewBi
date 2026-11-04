@@ -22,12 +22,27 @@ final class DynamicModel {
 
     @ObservationIgnored private var offset = ""
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    /// 非 nil 时只看这个 UP 主的动态（空间页「动态」Tab），不需要登录
+    let hostMid: Int?
+
+    init(hostMid: Int? = nil) {
+        self.hostMid = hostMid
+    }
 
     func refresh() async {
+        guard hostMid == nil else {
+            load(reset: true)
+            await loadTask?.value
+            return
+        }
         async let portal = try? BiliClient.shared.get(.dynamicPortal, as: DynamicPortal.self)
         load(reset: true)
         await loadTask?.value
         if let list = await portal?.upList?.items { ups = list }
+    }
+
+    func loadIfNeeded() {
+        if items.isEmpty, !isLoading { load(reset: true) }
     }
 
     func loadMore(after item: DynamicItem) {
@@ -44,17 +59,18 @@ final class DynamicModel {
         }
         guard !isLoading, hasMore else { return }
         isLoading = true
-        let type = filter.type, offset = offset
+        let type = filter.type, offset = offset, hostMid = hostMid
         loadTask = Task {
             do {
-                let feed = try await BiliClient.shared.get(.dynamicFeed(type: type, offset: offset), as: DynamicFeed.self)
+                let endpoint: Endpoint = hostMid.map { .spaceDynamic(mid: $0, offset: offset) } ?? .dynamicFeed(type: type, offset: offset)
+                let feed = try await BiliClient.shared.get(endpoint, as: DynamicFeed.self)
                 guard !Task.isCancelled else { return }
                 let known = reset ? [] : Set(items.map(\.id))
                 let fresh = (feed.items ?? []).filter { !known.contains($0.id) }
                 items = reset ? fresh : items + fresh
                 self.offset = feed.offset ?? ""
                 hasMore = (feed.hasMore ?? false) && !self.offset.isEmpty
-                if reset, type == "all", let baseline = feed.updateBaseline {
+                if reset, hostMid == nil, type == "all", let baseline = feed.updateBaseline {
                     DynamicBadge.shared.markSeen(baseline: baseline)
                 }
                 error = nil
@@ -263,7 +279,7 @@ private struct UpdateRing: View {
 }
 
 /// 动态的评论面板；模型放在 @State 里，父视图刷新时不会重建、不会重复请求
-private struct DynamicCommentSheet: View {
+struct DynamicCommentSheet: View {
     @State private var model: CommentModel
 
     init(target: CommentTarget) {
@@ -299,7 +315,7 @@ struct CommentTarget: Identifiable {
 
 // MARK: - 卡片
 
-private struct DynamicCard: View {
+struct DynamicCard: View {
     let item: DynamicItem
     let model: DynamicModel
     var onComment: () -> Void

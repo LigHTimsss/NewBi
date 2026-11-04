@@ -4,7 +4,7 @@ import SwiftUI
 @Observable
 final class SpaceModel {
     enum Tab: String, CaseIterable {
-        case home = "主页", videos = "投稿"
+        case home = "主页", dynamic = "动态", videos = "投稿", seasons = "合集", favorites = "收藏"
     }
 
     enum Order: String, CaseIterable {
@@ -41,9 +41,39 @@ final class SpaceModel {
     @ObservationIgnored private var page = 1
     @ObservationIgnored private var loadTask: Task<Void, Never>?
 
+    /// 「动态」Tab：切走再切回不重新加载
+    let dynamics: DynamicModel
+    /// 「合集」Tab：合集 + 系列
+    private(set) var seasons: [SpaceSeason]?
+    private(set) var seasonsError: String?
+    /// 「收藏」Tab：对方公开的收藏夹
+    private(set) var favorites: [FavFolder]?
+    private(set) var favoritesError: String?
+
     init(mid: Int) {
         self.mid = mid
         relation = RelationModel(mid: mid)
+        dynamics = DynamicModel(hostMid: mid)
+    }
+
+    func loadSeasons(force: Bool = false) async {
+        guard force || seasons == nil else { return }
+        do {
+            seasons = try await BiliClient.shared.get(.spaceSeasons(mid: mid, page: 1), as: SpaceSeasonsList.self).all
+            seasonsError = nil
+        } catch {
+            seasonsError = error.localizedDescription
+        }
+    }
+
+    func loadFavorites(force: Bool = false) async {
+        guard force || favorites == nil else { return }
+        do {
+            favorites = try await BiliClient.shared.get(.favFolders(mid: mid, page: 1), as: FavFolderPage.self).list ?? []
+            favoritesError = nil
+        } catch {
+            favoritesError = error.localizedDescription
+        }
     }
 
     func load() async {
@@ -280,15 +310,19 @@ struct SpaceView: View {
             }
             return item.rawValue
         }
-        .frame(maxWidth: 240)
+        .frame(maxWidth: 380)
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, 12)
     }
 
     @ViewBuilder
     private var tabContent: some View {
         switch tab {
         case .home: SpaceHome(model: model, showAll: { withAnimation(Motion.tab) { tab = .videos } })
+        case .dynamic: SpaceDynamics(model: model.dynamics)
         case .videos: SpaceVideos(model: model)
+        case .seasons: SpaceSeasons(model: model)
+        case .favorites: SpaceFavorites(model: model)
         }
     }
 }

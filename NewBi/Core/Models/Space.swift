@@ -129,6 +129,91 @@ struct RelationInfo: Decodable, Sendable {
     let attribute: Int
 }
 
+// MARK: 合集 / 系列
+
+/// 合集或系列里的一个视频（两个接口字段一致）
+struct SeasonArchive: Decodable, Identifiable, Hashable, Sendable {
+    struct Stat: Decodable, Hashable, Sendable {
+        let view: Int?
+    }
+
+    let aid: Int
+    let bvid: String
+    let title: String
+    let pic: String
+    let duration: Int
+    let pubdate: Int?
+    let stat: Stat?
+
+    var id: Int { aid }
+
+    func card(owner: Owner?) -> VideoCard {
+        VideoCard(id: aid, bvid: bvid, cid: nil, title: title, pic: pic, duration: duration, owner: owner,
+                  stat: VideoStat(view: stat?.view, danmaku: nil, like: nil, coin: nil, favorite: nil, share: nil, reply: nil))
+    }
+}
+
+/// 空间页「合集」里的一项：合集（season）或系列（series）
+struct SpaceSeason: Decodable, Identifiable, Hashable, Sendable {
+    struct Meta: Decodable, Hashable, Sendable {
+        let seasonID: Int?
+        let seriesID: Int?
+        let name: String
+        let cover: String?
+        let total: Int?
+        let description: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case name, cover, total, description
+            case seasonID = "season_id"
+            case seriesID = "series_id"
+        }
+    }
+
+    let meta: Meta
+    let archives: [SeasonArchive]?
+
+    var isSeries: Bool { meta.seasonID == nil }
+    var sourceID: Int { meta.seasonID ?? meta.seriesID ?? 0 }
+    var id: String { (isSeries ? "series-" : "season-") + "\(sourceID)" }
+}
+
+struct SpaceSeasonsList: Decodable, Sendable {
+    struct Items: Decodable, Sendable {
+        let seasonsList: [SpaceSeason]?
+        let seriesList: [SpaceSeason]?
+
+        private enum CodingKeys: String, CodingKey {
+            case seasonsList = "seasons_list"
+            case seriesList = "series_list"
+        }
+    }
+
+    struct Page: Decodable, Sendable {
+        let total: Int?
+    }
+
+    let itemsLists: Items
+    let page: Page?
+
+    var all: [SpaceSeason] { (itemsLists.seasonsList ?? []) + (itemsLists.seriesList ?? []) }
+
+    private enum CodingKeys: String, CodingKey {
+        case page
+        case itemsLists = "items_lists"
+    }
+}
+
+/// 合集 / 系列的视频分页
+struct SeasonArchivePage: Decodable, Sendable {
+    struct Page: Decodable, Sendable {
+        let total: Int?
+    }
+
+    let archives: [SeasonArchive]?
+    let page: Page?
+}
+
 extension String {
     /// "1:02:33" / "12:08" → 秒
     var durationSeconds: Int {

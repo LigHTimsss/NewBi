@@ -10,6 +10,10 @@ enum Route: Hashable {
     case downloads
     case favorites
     case favoriteFolder(id: Int, title: String)
+    /// 只知道 BV 号的视频（评论 / 动态里的链接）
+    case video(bvid: String)
+    /// UP 主的合集（season）或系列（series）
+    case season(mid: Int, id: Int, title: String, isSeries: Bool)
 }
 
 /// 根视图：三个 Tab 横向平移切换（Flow 画板），底部为自定义玻璃导航。
@@ -68,6 +72,10 @@ struct RootView: View {
                         FavoritesView()
                     case .favoriteFolder(let id, let title):
                         FolderView(id: id, title: title)
+                    case .season(let mid, let id, let title, let isSeries):
+                        SeasonView(mid: mid, id: id, title: title, isSeries: isSeries)
+                    case .video(let bvid):
+                        VideoDestination(card: VideoCard(id: 0, bvid: bvid, cid: nil, title: "", pic: "", duration: 0, owner: nil, stat: nil))
                     }
                 }
                 .miniPlayerInset()
@@ -83,6 +91,21 @@ struct RootView: View {
             }
         }
         .onChange(of: path.count) { old, new in NowPlaying.shared.pathChanged(from: old, to: new) }
+        // 正文里的 newbi:// 链接：@ 进空间、BV 号开视频；其它网址交给系统（Safari）
+        .environment(\.openURL, OpenURLAction { url in
+            switch AppLink.parse(url) {
+            case .space(let mid):
+                path.append(Route.space(mid: mid))
+                return .handled
+            case .video(let bvid):
+                path.append(Route.video(bvid: bvid))
+                return .handled
+            case .seek:
+                return .discarded // 只在视频页里有意义，由视频页自己处理
+            case .external:
+                return .systemAction
+            }
+        })
         .sensoryFeedback(.selection, trigger: tab)
         .toast(
             Binding(get: { ToastCenter.shared.message }, set: { ToastCenter.shared.message = $0 }),
