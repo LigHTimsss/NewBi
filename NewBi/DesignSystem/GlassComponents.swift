@@ -407,6 +407,61 @@ struct GlassCircleButton: View {
     }
 }
 
+/// 圆形玻璃头像按钮：登录后显示自己的头像（玻璃圈里嵌一张圆头像），未登录显示人形图标。
+/// 头像加载完成时从图标交叉淡入，不闪白
+struct GlassAvatarButton: View {
+    var url: String?
+    var label: String
+    var size: CGFloat = 40
+    var action: () -> Void = {}
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                if let url, !url.isEmpty {
+                    RemoteImage(url: url, size: CGSize(width: size, height: size), background: .clear)
+                        .clipShape(.circle)
+                        .overlay { Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.5) }
+                        .padding(3)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                } else {
+                    Image(systemName: "person")
+                        .font(.system(size: size * 0.45, weight: .medium))
+                        .transition(.opacity)
+                }
+            }
+            .frame(width: size, height: size)
+            .contentShape(.circle)
+            .animation(Motion.component, value: url)
+        }
+        .buttonStyle(PressableStyle())
+        .glassEffect(.regular.interactive(), in: .circle)
+        .accessibilityLabel(label)
+    }
+}
+
+/// 红色未读数气泡（0 不显示，超过 99 显示 99+）
+struct UnreadBadge: View {
+    var count: Int
+
+    var body: some View {
+        if count > 0 {
+            Text(count > 99 ? "99+" : "\(count)")
+                .font(.system(size: 10, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .padding(.horizontal, count > 9 ? 4 : 0)
+                .frame(minWidth: 16, minHeight: 16)
+                .background(Color.red, in: .capsule)
+                .overlay { Capsule().strokeBorder(Theme.background, lineWidth: 1.5) }
+                .contentTransition(.numericText())
+                .transition(.scale.combined(with: .opacity))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 // MARK: - 入场：模糊 + 上移（动效规范「模糊入场」）
 
 private struct RiseIn: ViewModifier {

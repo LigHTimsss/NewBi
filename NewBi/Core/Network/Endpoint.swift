@@ -285,6 +285,86 @@ extension Endpoint {
     /// 发评论（POST）
     static let replyAdd = Endpoint(path: "/x/v2/reply/add")
 
+    // MARK: 消息（需登录）
+
+    static let messageHost = "https://message.bilibili.com"
+    static let vcHost = "https://api.vc.bilibili.com"
+    private static let web = ["build": "0", "mobi_app": "web"]
+
+    /// 回复 / @ / 赞 / 系统通知 的未读数（不含私信）
+    static let msgUnread = Endpoint(path: "/x/msgfeed/unread", query: web)
+
+    /// 私信未读数
+    static let dmUnread = Endpoint(host: vcHost, path: "/session_svr/v1/session_svr/single_unread", query: web.merging([
+        "unread_type": "0", "show_unfollow_list": "1", "show_dustbin": "0",
+    ]) { $1 })
+
+    /// 回复我的 / @ 我的 / 收到的赞（游标分页：上一页 cursor 的 id 与 time，首页都不传）
+    static func notices(_ kind: NoticeKind, cursorID: Int?, cursorTime: Int?) -> Endpoint {
+        var query = web
+        query["platform"] = "web"
+        if let cursorID, let cursorTime {
+            query["id"] = "\(cursorID)"
+            query[kind.timeKey] = "\(cursorTime)"
+        }
+        return Endpoint(path: "/x/msgfeed/\(kind.rawValue)", query: query)
+    }
+
+    /// 系统通知首页（data 为对象，列表在 system_notify_list）
+    static func systemNotices(csrf: String) -> Endpoint {
+        Endpoint(host: messageHost, path: "/x/sys-msg/query_user_notify", query: web.merging([
+            "csrf": csrf, "page_size": "20",
+        ]) { $1 })
+    }
+
+    /// 系统通知后续页（data 直接是数组；cursor 取上一页最后一条的 cursor）
+    static func systemNoticesMore(csrf: String, cursor: Int) -> Endpoint {
+        Endpoint(host: messageHost, path: "/x/sys-msg/query_notify_list", query: web.merging([
+            "csrf": csrf, "data_type": "1", "cursor": "\(cursor)", "page_size": "20",
+        ]) { $1 })
+    }
+
+    /// 把系统通知标为已读到 cursor
+    static func systemNoticesRead(csrf: String, cursor: Int) -> Endpoint {
+        Endpoint(host: messageHost, path: "/x/sys-msg/update_cursor", query: web.merging([
+            "csrf": csrf, "cursor": "\(cursor)", "has_up": "0",
+        ]) { $1 })
+    }
+
+    /// 私信会话列表（session_type 4 = 全部；按会话时间倒序；end_ts 翻页）
+    static func chatSessions(endTs: Int?) -> Endpoint {
+        var query = web.merging([
+            "session_type": "4", "group_fold": "1", "unfollow_fold": "0", "sort_rule": "2", "size": "30",
+        ]) { $1 }
+        if let endTs { query["end_ts"] = "\(endTs)" }
+        return Endpoint(host: vcHost, path: "/session_svr/v1/session_svr/get_sessions", query: query)
+    }
+
+    /// 一批用户的昵称、头像（会话列表里只有 mid）
+    static func userCards(_ mids: [Int]) -> Endpoint {
+        Endpoint(host: vcHost, path: "/account/v1/user/cards", query: ["uids": mids.map(String.init).joined(separator: ",")])
+    }
+
+    /// 某个会话的消息（倒序）。end_seqno：取比它更早的；begin_seqno：取比它更新的
+    static func chatMessages(talkerID: Int, sessionType: Int, begin: Int? = nil, end: Int? = nil) -> Endpoint {
+        var query = web.merging([
+            "talker_id": "\(talkerID)", "session_type": "\(sessionType)", "size": "30", "sender_device_id": "1",
+        ]) { $1 }
+        if let begin { query["begin_seqno"] = "\(begin)" }
+        if let end { query["end_seqno"] = "\(end)" }
+        return Endpoint(host: vcHost, path: "/svr_sync/v1/svr_sync/fetch_session_msgs", query: query)
+    }
+
+    /// 会话设为已读（POST：talker_id、session_type、ack_seqno、csrf）
+    static let chatAck = Endpoint(host: vcHost, path: "/session_svr/v1/session_svr/update_ack")
+
+    /// 发私信（POST 表单 + URL 上的 WBI 签名）
+    static func chatSend(sender: Int, receiver: Int, deviceID: String) -> Endpoint {
+        Endpoint(host: vcHost, path: "/web_im/v1/web_im/send_msg", query: [
+            "w_sender_uid": "\(sender)", "w_receiver_id": "\(receiver)", "w_dev_id": deviceID,
+        ], signed: true)
+    }
+
     /// 弹幕分段（Protobuf，每段 6 分钟）
     static func danmakuSegment(cid: Int, index: Int) -> Endpoint {
         Endpoint(path: "/x/v2/dm/web/seg.so", query: ["type": "1", "oid": "\(cid)", "segment_index": "\(index)"])

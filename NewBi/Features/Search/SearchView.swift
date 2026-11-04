@@ -362,6 +362,7 @@ private struct SearchResults: View {
                                 )
                             }
                             .buttonStyle(PressableStyle())
+                            .zoomSource(video.card)
                             .watchLaterMenu(video.card)
                             .riseIn(index: index)
                             .onAppear { model.loadMore(after: video.id) }

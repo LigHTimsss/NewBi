@@ -208,6 +208,7 @@ private struct HistoryRow: View {
                         .frame(height: 2)
                     }
                     .clipShape(.rect(cornerRadius: 10))
+                    .zoomSource(item.card, cornerRadius: 10)
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text(item.title)

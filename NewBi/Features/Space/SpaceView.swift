@@ -397,6 +397,7 @@ private struct SpaceHome: View {
                 section("置顶视频") {
                     NavigationLink(value: top) { FeaturedVideo(card: top) }
                         .buttonStyle(PressableStyle())
+                        .zoomSource(top)
                 }
             }
 
@@ -407,6 +408,7 @@ private struct SpaceHome: View {
                             ForEach(model.masterpieces) { card in
                                 NavigationLink(value: card) { VideoCardView(card: card, showsOwner: false) }
                                     .buttonStyle(PressableStyle())
+                                    .zoomSource(card)
                                     .frame(width: 194)
                             }
                         }
@@ -425,6 +427,7 @@ private struct SpaceHome: View {
                         ForEach(Array(model.recent.enumerated()), id: \.element.id) { index, video in
                             NavigationLink(value: video.card) { VideoCardView(card: video.card, showsOwner: false) }
                                 .buttonStyle(PressableStyle())
+                                .zoomSource(video.card)
                                 .watchLaterMenu(video.card)
                                 .riseIn(index: index)
                         }
@@ -531,6 +534,7 @@ private struct SpaceVideos: View {
             ForEach(Array(model.videos.enumerated()), id: \.element.id) { index, video in
                 NavigationLink(value: video.card) { VideoRow(card: video.card, subtitle: video.subtitle) }
                     .buttonStyle(PressableStyle())
+                    .zoomSource(video.card)
                     .watchLaterMenu(video.card)
                     .riseIn(index: index)
                     .onAppear { model.loadMore(after: video) }

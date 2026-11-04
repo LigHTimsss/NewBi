@@ -129,6 +129,7 @@ private struct SeasonSection: View {
                             }
                         }
                         .buttonStyle(PressableStyle())
+                        .zoomSource(card)
                         .watchLaterMenu(card)
                     }
                 }
@@ -212,6 +213,7 @@ struct SeasonView: View {
                         }
                     }
                     .buttonStyle(PressableStyle())
+                    .zoomSource(card)
                     .simultaneousGesture(TapGesture().onEnded {
                         PlayQueue.shared.start(model.archives.map { $0.card(owner: nil) }, title: title)
                     })

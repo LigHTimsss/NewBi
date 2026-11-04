@@ -374,6 +374,7 @@ struct FolderView: View {
         } else {
             NavigationLink(value: media.card) { VideoRow(card: media.card, subtitle: subtitle) }
                 .buttonStyle(PressableStyle())
+                .zoomSource(media.card)
                 .contextMenu { removeButton(media) }
         }
     }

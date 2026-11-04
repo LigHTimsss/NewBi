@@ -59,6 +59,8 @@ final class FeedModel {
 /// 首页：顶部玻璃频道条 + 横向分页（推荐 / 热门）
 struct HomeView: View {
     var onAvatar: () -> Void
+    var onMessages: () -> Void
+    @Environment(SessionStore.self) private var session
     @State private var channel: Channel = .recommend
     @State private var feeds: [Channel: FeedModel] = Dictionary(
         uniqueKeysWithValues: Channel.allCases.map { ($0, FeedModel(channel: $0)) }
@@ -84,9 +86,14 @@ struct HomeView: View {
         .overlay(alignment: .top) {
             GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 10) {
-                    GlassCircleButton(systemImage: "person", label: "个人中心", action: onAvatar)
+                    GlassAvatarButton(url: session.isLoggedIn ? session.user?.face : nil, label: "个人中心", action: onAvatar)
                     GlassSegmented(options: Channel.allCases, selection: $channel, title: \.rawValue)
-                    GlassCircleButton(systemImage: "envelope", label: "消息")
+                    GlassCircleButton(systemImage: "envelope", label: "消息", action: onMessages)
+                        .overlay(alignment: .topTrailing) {
+                            UnreadBadge(count: MessageBadge.shared.total)
+                                .offset(x: 4, y: -2)
+                        }
+                        .accessibilityValue(MessageBadge.shared.total > 0 ? "\(MessageBadge.shared.total) 条未读" : "")
                 }
             }
             .padding(.horizontal, 16)
@@ -103,6 +110,7 @@ private struct FeedPage: View {
                 if let first = model.items.first {
                     NavigationLink(value: first) { FeaturedBanner(card: first) }
                         .buttonStyle(PressableStyle())
+                        .zoomSource(first, cornerRadius: 18)
                         .watchLaterMenu(first)
                         .riseIn(index: 0)
                 }
@@ -110,6 +118,7 @@ private struct FeedPage: View {
                     ForEach(Array(model.items.dropFirst().enumerated()), id: \.element.id) { index, card in
                         NavigationLink(value: card) { VideoCardView(card: card) }
                             .buttonStyle(PressableStyle())
+                            .zoomSource(card)
                             .watchLaterMenu(card)
                             .riseIn(index: index + 1)
                             .onAppear { Task { await model.loadMoreIfNeeded(after: card) } }

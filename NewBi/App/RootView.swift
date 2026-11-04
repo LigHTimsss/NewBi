@@ -14,6 +14,12 @@ enum Route: Hashable {
     case video(bvid: String)
     /// UP 主的合集（season）或系列（series）
     case season(mid: Int, id: Int, title: String, isSeries: Bool)
+    /// 消息中心
+    case messages
+    /// 回复我的 / @ 我的 / 收到的赞 / 系统通知
+    case notices(NoticeKind)
+    /// 私信会话
+    case chat(ChatPeer)
 }
 
 /// 根视图：三个 Tab 横向平移切换（Flow 画板），底部为自定义玻璃导航。
@@ -23,7 +29,10 @@ struct RootView: View {
     @State private var path = NavigationPath()
     /// 递增即让动态页刷新：有红点时切过去、或在动态页再点一次「动态」
     @State private var dynamicRefresh = 0
+    @Environment(SessionStore.self) private var session
     @Namespace private var searchTransition
+    /// 视频卡片 ⇄ 视频页 ⇄ 迷你胶囊 的缩放转场
+    @Namespace private var zoom
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -43,6 +52,8 @@ struct RootView: View {
             .background(Theme.background)
             // 重新打开被隐藏导航栏关掉的侧滑返回
             .background { BackGestureEnabler().frame(width: 0, height: 0) }
+            // 迷你胶囊位（在底栏上方，和迷你条同一位置）：正在播放的视频返回时收缩到这里
+            .miniSlot(bottom: 72)
             .overlay(alignment: .bottom) {
                 GlassTabBar(
                     selection: tab,
@@ -78,17 +89,26 @@ struct RootView: View {
                         SeasonView(mid: mid, id: id, title: title, isSeries: isSeries)
                     case .video(let bvid):
                         VideoDestination(card: VideoCard(id: 0, bvid: bvid, cid: nil, title: "", pic: "", duration: 0, owner: nil, stat: nil))
+                    case .messages:
+                        MessageCenterView()
+                    case .notices(let kind):
+                        NoticeListView(kind: kind)
+                    case .chat(let peer):
+                        ChatView(peer: peer)
                     }
                 }
                 .miniPlayerInset()
+                .modifier(RouteMiniSlot(route: route))
             }
         }
-        // 迷你播放条：根页面浮在底栏上方，二级页面贴底；从下方滑入、横滑或点 × 关闭
+        .environment(\.zoomNamespace, zoom)
+        // 迷你播放条：根页面浮在底栏上方，二级页面贴底；视频页收缩到胶囊位后在原地淡入，
+        // 点它时视频页从胶囊位展开（缩放转场），它自己淡出
         .overlay(alignment: .bottom) {
             if let mini = NowPlaying.shared.minimized {
                 MiniPlayerBar(model: mini) { path.append(mini.card) }
                     .padding(.bottom, path.isEmpty ? 72 : 8)
-                    .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.92, anchor: .bottom)))
+                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
                     .animation(Motion.component, value: path.isEmpty)
             }
         }
@@ -119,12 +139,17 @@ struct RootView: View {
             if phase == .background { NowPlaying.shared.enteredBackground() }
         }
         .task { await DynamicBadge.shared.check() }
+        // 消息未读数：启动、回到前台、登录态变化时各查一次
+        .task(id: session.isLoggedIn) { await MessageBadge.shared.check(loggedIn: session.isLoggedIn) }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await MessageBadge.shared.check(loggedIn: session.isLoggedIn) } }
+        }
     }
 
     @ViewBuilder
     private func page(_ item: AppTab) -> some View {
         switch item {
-        case .home: HomeView(onAvatar: { select(.mine) })
+        case .home: HomeView(onAvatar: { select(.mine) }, onMessages: { path.append(Route.messages) })
         case .dynamic: DynamicView(refreshToken: dynamicRefresh)
         case .mine: MineView()
         }
@@ -135,5 +160,18 @@ struct RootView: View {
             dynamicRefresh += 1
         }
         withAnimation(Motion.tab) { tab = item }
+    }
+}
+
+/// 二级页面的迷你胶囊位（贴底）。视频页自己带，这里跳过
+private struct RouteMiniSlot: ViewModifier {
+    let route: Route
+
+    func body(content: Content) -> some View {
+        if case .video = route {
+            content
+        } else {
+            content.miniSlot(bottom: 8)
+        }
     }
 }

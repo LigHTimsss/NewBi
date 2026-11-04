@@ -133,6 +133,7 @@ private struct CachedRow: View {
                             .padding(5)
                     }
                     .clipShape(.rect(cornerRadius: 12))
+                    .zoomSource(record.card, cornerRadius: 12)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(record.title).font(.system(size: 16, weight: .semibold)).lineLimit(2)
                     Text("\(record.qualityName) · \(DownloadsView.size(record.totalBytes))")

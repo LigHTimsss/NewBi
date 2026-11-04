@@ -191,15 +191,26 @@ struct VideoDetailView: View {
     let card: VideoCard
     /// 连播队列：播完后换到下一个视频（由 VideoDestination 原地替换）
     var onAdvance: ((VideoCard) -> Void)? = nil
+    /// 返回时该收进迷你胶囊（true）还是收回卡片（false），随播放状态变化
+    var onCollapseTarget: ((Bool) -> Void)? = nil
     @State private var model: VideoDetailModel?
     @State private var upNext: VideoCard?
     @State private var tab = 0
+    /// 简介 → 评论的横滑进度 0…1，Tab 下划线跟手
+    @State private var pageProgress: CGFloat = 0
     @State private var isFullscreen = false
     @State private var locked = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var parentOpenURL
     @AppStorage("backgroundPlay") private var backgroundPlay = true
+    @AppStorage("miniPlayer") private var miniPlayerEnabled = true
+
+    /// 与 NowPlaying.minimize 的判断一致：开着迷你条、正在播放
+    private var collapsesToMini: Bool {
+        guard miniPlayerEnabled, let model else { return false }
+        return model.player.isPlaying
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -207,19 +218,29 @@ struct VideoDetailView: View {
                 player
                     .frame(height: isFullscreen ? geo.size.height : geo.size.width * 9 / 16)
 
-                if !isFullscreen {
-                    DetailTabs(selection: $tab, replyCount: model?.comments.total ?? model?.detail?.stat.reply)
-                    if let model {
-                        if tab == 0 {
-                            IntroSection(model: model)
-                        } else {
-                            CommentSection(model: model.comments)
-                        }
+                // 全屏时不移除，只收起：退出全屏后简介 / 评论原样还在（不重新淡入、滚动位置不丢）
+                VStack(spacing: 0) {
+                    DetailTabs(
+                        selection: tab,
+                        progress: pageProgress,
+                        replyCount: model?.comments.total ?? model?.detail?.stat.reply
+                    ) { index in
+                        withAnimation(Motion.component) { tab = index }
                     }
-                    Spacer(minLength: 0)
+                    if let model {
+                        DetailPager(model: model, tab: $tab, progress: $pageProgress)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
                 }
+                .frame(height: isFullscreen ? 0 : nil)
+                .clipped()
+                .opacity(isFullscreen ? 0 : 1)
+                .allowsHitTesting(!isFullscreen)
+                .accessibilityHidden(isFullscreen)
             }
         }
+        .onChange(of: collapsesToMini) { _, value in onCollapseTarget?(value) }
         .background(isFullscreen ? Color.black : Theme.background)
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden(isFullscreen)
@@ -498,10 +519,57 @@ private struct PlaybackBar: View {
 
 // MARK: - 简介 / 评论
 
+/// 简介 / 评论两页并排放在一个横向分页 ScrollView 里：左右滑切换，两页都常驻
+/// （切回来不重建、不再淡入、滚动位置不丢）。评论页第一次滑到 / 点到时才挂上，不拖慢进入视频页。
+private struct DetailPager: View {
+    let model: VideoDetailModel
+    @Binding var tab: Int
+    @Binding var progress: CGFloat
+    @State private var commentsMounted = false
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 0) {
+                IntroSection(model: model)
+                    .containerRelativeFrame(.horizontal)
+                    .id(0)
+                Group {
+                    if commentsMounted {
+                        CommentSection(model: model.comments)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .containerRelativeFrame(.horizontal)
+                .id(1)
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .scrollPosition(id: Binding(get: { tab }, set: { if let value = $0 { tab = value } }))
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.containerSize.width > 0 ? geo.contentOffset.x / geo.containerSize.width : 0
+        } action: { _, value in
+            progress = min(max(value, 0), 1)
+            if value > 0.01, !commentsMounted { commentsMounted = true }
+        }
+        .onChange(of: tab, initial: true) { _, value in
+            if value == 1 { commentsMounted = true }
+        }
+        .sensoryFeedback(.selection, trigger: tab)
+    }
+}
+
+/// 下划线位置由横滑进度插值，滑动中间被拉长一点（液体感），松手吸附
 private struct DetailTabs: View {
-    @Binding var selection: Int
+    var selection: Int
+    var progress: CGFloat
     var replyCount: Int?
-    @Namespace private var ns
+    var onSelect: (Int) -> Void
+    /// 两个标签下划线槽位的中心（在本视图坐标系中）
+    @State private var slots: [Int: CGPoint] = [:]
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
@@ -526,16 +594,35 @@ private struct DetailTabs: View {
             .buttonStyle(PressableStyle())
             .glassEffect(.regular.interactive(), in: .capsule)
         }
+        .coordinateSpace(.named(Self.space))
+        .overlay(alignment: .topLeading) { indicator }
         .padding(.leading, 6)
         .padding(.trailing, 12)
         .frame(height: 46)
         .overlay(alignment: .bottom) { Theme.separator.frame(height: 1) }
     }
 
+    private static let space = "detailTabs"
+
+    @ViewBuilder
+    private var indicator: some View {
+        if let start = slots[0], let end = slots[1] {
+            let t = progress
+            // 中途拉长，两端回到 16pt
+            let width = 16 + 18 * sin(t * .pi)
+            Capsule()
+                .fill(accent)
+                .frame(width: width, height: 3)
+                .shadow(color: accent.opacity(0.5), radius: 3)
+                .position(x: start.x + (end.x - start.x) * t, y: start.y)
+                .allowsHitTesting(false)
+        }
+    }
+
     private func tab(_ title: String, index: Int, badge: String? = nil) -> some View {
         let on = selection == index
         return Button {
-            withAnimation(Motion.component) { selection = index }
+            onSelect(index)
         } label: {
             VStack(spacing: 3) {
                 HStack(spacing: 3) {
@@ -543,10 +630,14 @@ private struct DetailTabs: View {
                     if let badge { Text(badge).font(.system(size: 12)) }
                 }
                 .foregroundStyle(on ? accent.accentText(scheme) : Theme.secondaryText)
-                ZStack {
-                    if on { Capsule().fill(accent).matchedGeometryEffect(id: "detailTab", in: ns) }
-                }
-                .frame(width: 16, height: 3)
+                .animation(Motion.micro, value: on)
+                // 下划线的槽位：真正的下划线是上面 overlay 里的那一条
+                Color.clear
+                    .frame(width: 16, height: 3)
+                    .onGeometryChange(for: CGPoint.self) { proxy in
+                        let frame = proxy.frame(in: .named(Self.space))
+                        return CGPoint(x: frame.midX, y: frame.midY)
+                    } action: { slots[index] = $0 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -640,6 +731,7 @@ private struct IntroSection: View {
                         ForEach(Array(model.related.enumerated()), id: \.element.id) { index, card in
                             NavigationLink(value: card) { VideoRow(card: card) }
                                 .buttonStyle(PressableStyle())
+                                .zoomSource(card)
                                 .watchLaterMenu(card)
                                 .riseIn(index: index)
                         }

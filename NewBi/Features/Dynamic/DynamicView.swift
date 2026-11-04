@@ -435,6 +435,7 @@ private struct DynamicBody: View {
             if let video = content?.video(author: modules.author) {
                 NavigationLink(value: video) { DynamicVideo(card: video) }
                     .buttonStyle(PressableStyle())
+                    .zoomSource(video)
                     .watchLaterMenu(video)
             }
             let images = content?.images ?? []

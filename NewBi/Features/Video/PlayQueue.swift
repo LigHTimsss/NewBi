@@ -29,19 +29,27 @@ final class PlayQueue {
 }
 
 /// 导航目的地：视频页外面包一层，连播时只换里面的视频页（不加深导航栈）
+/// 同时是缩放转场的目的地：从卡片（或迷你胶囊）展开；返回时正在播放就收进迷你胶囊，否则收回卡片
 struct VideoDestination: View {
     @State private var card: VideoCard
+    /// 返回时收进迷你胶囊（还在播放）还是收回卡片（暂停 / 播完）
+    @State private var collapsesToMini: Bool
 
     init(card: VideoCard) {
         _card = State(initialValue: card)
+        // 从迷你条点进来：从胶囊位展开
+        _collapsesToMini = State(initialValue: NowPlaying.shared.minimized?.card.bvid == card.bvid)
     }
 
     var body: some View {
-        VideoDetailView(card: card) { next in
+        VideoDetailView(card: card, onAdvance: { next in
             withAnimation(Motion.component) { card = next }
-        }
+        }, onCollapseTarget: { collapsesToMini = $0 })
         .id(card.bvid)
         .transition(.opacity.combined(with: .scale(scale: 0.98)))
+        // 在这一页上再点开别的视频、返回时也能收进胶囊
+        .miniSlot(bottom: 8)
+        .zoomDestination(id: collapsesToMini ? ZoomID.mini : ZoomID.card(card))
     }
 }
 
