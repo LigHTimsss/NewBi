@@ -470,7 +470,7 @@ private struct StageLayer: ViewModifier, Animatable {
     let role: Role
     var m: StageMetrics
 
-    var animatableData: StageMetrics.AnimatableData {
+    nonisolated var animatableData: StageMetrics.AnimatableData {
         get { m.animatableData }
         set { m.animatableData = newValue }
     }
@@ -508,7 +508,7 @@ private struct StageLayer: ViewModifier, Animatable {
 private struct StageScrim: View, Animatable {
     var m: StageMetrics
 
-    var animatableData: StageMetrics.AnimatableData {
+    nonisolated var animatableData: StageMetrics.AnimatableData {
         get { m.animatableData }
         set { m.animatableData = newValue }
     }
@@ -525,7 +525,7 @@ private struct StageScrim: View, Animatable {
 private struct StageBackdrop: View, Animatable {
     var m: StageMetrics
 
-    var animatableData: StageMetrics.AnimatableData {
+    nonisolated var animatableData: StageMetrics.AnimatableData {
         get { m.animatableData }
         set { m.animatableData = newValue }
     }

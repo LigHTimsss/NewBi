@@ -113,13 +113,7 @@ struct RemoteImage: View {
     var body: some View {
         let request = Self.request(url, size: size, scale: scale, fill: fill)
         let memory = ImageMemory.shared
-        let shown: UIImage? = if let loaded, loaded.url == request {
-            loaded.image
-        } else if let request {
-            memory.image(for: request) ?? memory.anySize(for: request)
-        } else {
-            nil
-        }
+        let shown = image(for: request)
         background
             .overlay {
                 if let shown {
@@ -137,6 +131,13 @@ struct RemoteImage: View {
                     loaded = Loaded(url: request, image: image)
                 }
             }
+    }
+
+    /// 刚加载好的 → 内存里同尺寸的 → 内存里别的尺寸（先顶上）
+    private func image(for request: URL?) -> UIImage? {
+        if let loaded, loaded.url == request { return loaded.image }
+        guard let request else { return nil }
+        return ImageMemory.shared.image(for: request) ?? ImageMemory.shared.anySize(for: request)
     }
 
     /// 实际请求的地址（服务端按像素裁好）：显示和预取用同一套规则，才能命中同一份缓存
