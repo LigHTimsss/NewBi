@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum PlayerPanel: Hashable {
-    case danmaku, quality, speed, more
+    case danmaku, quality, speed, more, parts
 }
 
 enum GestureHUD: Equatable {
@@ -32,7 +32,6 @@ struct FullscreenOverlay: View {
     @State private var hud: GestureHUD?
     @State private var pan: PanMode?
     @State private var hideTask: Task<Void, Never>?
-    @State private var liked = false
     @State private var message = ""
     @State private var toast: String?
     @FocusState private var inputFocused: Bool
@@ -83,7 +82,7 @@ struct FullscreenOverlay: View {
                         .contentShape(.rect)
                         .onTapGesture { self.panel = nil }
                         .accessibilityLabel("关闭面板")
-                    PlayerDrawer(panel: panel, controller: player) { self.panel = nil }
+                    PlayerDrawer(panel: panel, controller: player, model: model) { self.panel = nil }
                 }
                 .transition(.move(edge: .trailing))
             }
@@ -228,14 +227,17 @@ struct FullscreenOverlay: View {
 
             HStack(spacing: 14) {
                 iconButton(
-                    liked ? "hand.thumbsup.fill" : "hand.thumbsup", "点赞",
-                    count: (stat?.like ?? 0) + (liked ? 1 : 0), tint: liked ? accent : nil
+                    model.isLiked ? "hand.thumbsup.fill" : "hand.thumbsup", "点赞",
+                    count: (stat?.like ?? 0) + model.likeDelta, tint: model.isLiked ? accent : nil
                 ) {
-                    withAnimation(Motion.component) { liked.toggle() }
+                    Task { try? await model.toggleLike() }
                 }
                 iconButton("text.bubble", "评论", count: stat?.reply)
-                iconButton("star", "收藏", count: stat?.favorite)
-                iconButton("arrowshape.turn.up.right", "分享")
+                iconButton(model.isFavoured ? "star.fill" : "star", "收藏",
+                           count: (stat?.favorite ?? 0) + model.favDelta, tint: model.isFavoured ? accent : nil)
+                if model.pages.count > 1 {
+                    iconButton("list.bullet.rectangle", "选集", width: 30) { panel = .parts }
+                }
                 iconButton("ellipsis", "更多", width: 30) { panel = .more }
             }
         }

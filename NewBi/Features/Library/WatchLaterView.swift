@@ -122,6 +122,7 @@ struct WatchLaterView: View {
                     }
                     .buttonStyle(PressableStyle())
                     .fixedSize()
+                    .simultaneousGesture(TapGesture().onEnded { armQueue() })
                 }
                 .listRowBackground(Theme.background)
                 .listRowSeparator(.hidden)
@@ -129,6 +130,8 @@ struct WatchLaterView: View {
 
             ForEach(model.items) { item in
                 WatchLaterRow(item: item)
+                    // 从这里进入的视频播完后按列表顺序连播（已看完的跳过）
+                    .simultaneousGesture(TapGesture().onEnded { armQueue(from: item) })
                     .listRowBackground(Theme.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
@@ -166,6 +169,12 @@ struct WatchLaterView: View {
         } else if model.items.isEmpty {
             ContentUnavailableView("稍后再看是空的", systemImage: "clock", description: Text("长按视频卡片，或在视频页「更多」里添加"))
         }
+    }
+
+    /// 连播队列：跳过已看完的，但点进去的那一个总在队列里
+    private func armQueue(from item: WatchLaterItem? = nil) {
+        let start = item ?? model.items.first
+        PlayQueue.shared.start(model.items.filter { !$0.isFinished || $0.id == start?.id }.map(\.card), title: "稍后再看")
     }
 
     private func run(_ action: @escaping () async throws -> Void) {

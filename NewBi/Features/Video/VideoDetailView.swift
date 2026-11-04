@@ -188,7 +188,10 @@ final class VideoDetailModel {
 /// 全屏不另开页面：同一个播放器视图原地放大到整屏（AVPlayerLayer、弹幕图层都不重建），界面转为横屏。
 struct VideoDetailView: View {
     let card: VideoCard
+    /// 连播队列：播完后换到下一个视频（由 VideoDestination 原地替换）
+    var onAdvance: ((VideoCard) -> Void)? = nil
     @State private var model: VideoDetailModel?
+    @State private var upNext: VideoCard?
     @State private var tab = 0
     @State private var isFullscreen = false
     @State private var locked = false
@@ -224,11 +227,13 @@ struct VideoDetailView: View {
             // 从迷你播放条点回来：直接接回同一个播放器，不重新取流
             if let restored = NowPlaying.shared.claim(for: card) {
                 model = restored
+                configureQueue(restored)
                 return
             }
             // 延迟创建：避免视图重建时重复创建 AVPlayer
             let created = VideoDetailModel(card: card)
             model = created
+            configureQueue(created)
             await created.load()
         }
         .onAppear { UIDevice.current.beginGeneratingDeviceOrientationNotifications() }
@@ -271,7 +276,29 @@ struct VideoDetailView: View {
                 Color.black
             }
         }
+        .overlay(alignment: .bottom) {
+            if let next = upNext {
+                UpNextCard(next: next, queueTitle: PlayQueue.shared.title) {
+                    upNext = nil
+                    onAdvance?(next)
+                } onCancel: {
+                    withAnimation(Motion.component) { upNext = nil }
+                }
+                .frame(maxWidth: 460)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         .background(Color.black.ignoresSafeArea(edges: isFullscreen ? .all : .top))
+    }
+
+    /// 在连播队列里时：播完弹出「即将播放」，3 秒后换到下一个
+    private func configureQueue(_ model: VideoDetailModel) {
+        guard onAdvance != nil else { return }
+        let bvid = card.bvid
+        model.player.onEnded = {
+            guard let next = PlayQueue.shared.next(after: bvid) else { return }
+            withAnimation(Motion.component) { upNext = next }
+        }
     }
 
     private func setFullscreen(_ on: Bool, preferred: UIInterfaceOrientationMask = .landscapeRight) {
@@ -585,6 +612,7 @@ private struct IntroSection: View {
                     if model.pages.count > 1 {
                         PartPicker(model: model)
                     }
+                    QueueStrip(bvid: model.card.bvid)
                     Theme.separator.frame(height: 1)
 
                     LazyVStack(spacing: 12) {

@@ -61,6 +61,8 @@ final class PlayerController {
     var hasNextPart = false
     var hasPreviousPart = false
     @ObservationIgnored var onRequestPart: ((Int) -> Void)?
+    /// 整个视频播完（没有下一 P 可连播时）：连播队列用
+    @ObservationIgnored var onEnded: (() -> Void)?
 
     /// 实际播放速度（含长按临时倍速）
     var effectiveRate: Float { isBoosting ? boostRate : rate }
@@ -280,6 +282,8 @@ final class PlayerController {
             // 多 P 连播（设置里可关）
             if hasNextPart, UserDefaults.standard.object(forKey: "autoNextPart") as? Bool ?? true {
                 onRequestPart?(1)
+            } else {
+                onEnded?()
             }
         }
     }

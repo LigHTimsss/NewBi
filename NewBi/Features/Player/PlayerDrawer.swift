@@ -3,10 +3,11 @@ import AVKit
 
 private let secondaryOnDark = Color.white.opacity(0.62)
 
-/// 全屏右侧玻璃抽屉：弹幕设置 / 画质 / 倍速 / 更多
+/// 全屏右侧玻璃抽屉：弹幕设置 / 画质 / 倍速 / 更多 / 选集
 struct PlayerDrawer: View {
     let panel: PlayerPanel
     let controller: PlayerController
+    let model: VideoDetailModel
     var onClose: () -> Void
 
     var body: some View {
@@ -17,6 +18,7 @@ struct PlayerDrawer: View {
                 case .quality: QualityPanel(controller: controller, onClose: onClose)
                 case .speed: SpeedPanel(controller: controller, onClose: onClose)
                 case .more: MorePanel(controller: controller)
+                case .parts: PartsPanel(model: model)
                 }
             }
             .padding(.leading, 22)
@@ -66,6 +68,59 @@ private struct PanelCard<Content: View>: View {
 private struct CardDivider: View {
     var body: some View {
         Rectangle().fill(.white.opacity(0.1)).frame(height: 0.5)
+    }
+}
+
+// MARK: - 选集
+
+/// 全屏选集：竖向列表，当前 P 高亮；切换后面板保持打开，方便连续挑
+private struct PartsPanel: View {
+    let model: VideoDetailModel
+    @Environment(\.accent) private var accent
+
+    var body: some View {
+        PanelTitle("选集 · \(model.partIndex + 1) / \(model.pages.count)")
+        ScrollViewReader { proxy in
+            PanelCard {
+                ForEach(Array(model.pages.enumerated()), id: \.element.cid) { index, page in
+                    if index > 0 { CardDivider() }
+                    let on = index == model.partIndex
+                    Button {
+                        Task { await model.selectPart(index) }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text("P\(page.page)")
+                                .font(.system(size: 12, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(on ? accent : secondaryOnDark)
+                                .frame(width: 34, alignment: .leading)
+                            Text(page.part)
+                                .font(.system(size: 14, weight: on ? .semibold : .regular))
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if on {
+                                Image(systemName: "waveform")
+                                    .foregroundStyle(accent)
+                                    .symbolEffect(.variableColor.iterative, isActive: model.player.isPlaying)
+                            } else {
+                                Text(page.duration.durationText)
+                                    .font(.system(size: 12))
+                                    .monospacedDigit()
+                                    .foregroundStyle(secondaryOnDark)
+                            }
+                        }
+                        .frame(minHeight: 48)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(PressableStyle())
+                    .id(index)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+            .onAppear { proxy.scrollTo(model.partIndex, anchor: .center) }
+        }
+        .sensoryFeedback(.selection, trigger: model.partIndex)
     }
 }
 

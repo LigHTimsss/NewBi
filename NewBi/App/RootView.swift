@@ -48,7 +48,7 @@ struct RootView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: VideoCard.self) { VideoDetailView(card: $0) }
+            .navigationDestination(for: VideoCard.self) { VideoDestination(card: $0) }
             .navigationDestination(for: Route.self) { route in
                 Group {
                     switch route {
