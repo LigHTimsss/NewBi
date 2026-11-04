@@ -1,9 +1,8 @@
 # 在 GitHub 的 macOS 虚拟机上编译：模拟器版用来查编译错误，另外打一个未签名的 ipa（可自签安装）
+# 只手动触发（Actions 页面 → Build → Run workflow）；平时在 Codemagic 编译（codemagic.yaml）
 name: Build
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
     inputs:
       runner:
@@ -13,7 +12,7 @@ on:
         options: [macos-26, macos-15, macos-15-intel]
 
 concurrency:
-  # 手动触发按虚拟机分组，不和推送触发的、也不和别的虚拟机互相取消
+  # 按虚拟机分组，不同虚拟机互不取消
   group: build-${{ github.ref }}-${{ github.event_name }}-${{ inputs.runner }}
   cancel-in-progress: true
 
