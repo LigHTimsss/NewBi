@@ -80,19 +80,30 @@ final class FFmpegEngine: NSObject, PlaybackEngine {
     }
 }
 
-extension FFmpegEngine: @preconcurrency MediaPlayerDelegate {
+// 协议方法按 KSPlayer main 分支（二进制发布版）的 MediaPlayerDelegate 对齐，均为 @MainActor
+extension FFmpegEngine: MediaPlayerDelegate {
     func readyToPlay(player: some MediaPlayerProtocol) {
         onEvent?(.ready)
     }
 
     func changeLoadState(player: some MediaPlayerProtocol) {}
 
-    func changeBuffering(player: some MediaPlayerProtocol, progress: Int) {}
+    func changeBuffering(player: some MediaPlayerProtocol, progress: UInt8) {}
+
+    /// 进度由 PlayerController 的 4 Hz 时钟读取，这里不用
+    func changePlaybackTime(player: some MediaPlayerProtocol, time: TimeInterval) {}
 
     func playBack(player: some MediaPlayerProtocol, loopCount: Int) {}
 
+    func reachEndOfStream(player: some MediaPlayerProtocol) {
+        onEvent?(.ended)
+    }
+
+    func playerDidClear(player: some MediaPlayerProtocol) {}
+
+    /// 正常播完已由 reachEndOfStream 上报，这里只报错误
     func finish(player: some MediaPlayerProtocol, error: Error?) {
-        onEvent?(error == nil ? .ended : .failed(error))
+        if let error { onEvent?(.failed(error)) }
     }
 }
 #endif
