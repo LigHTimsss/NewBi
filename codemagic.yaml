@@ -13,6 +13,15 @@ workflows:
     scripts:
       - name: Xcode 版本
         script: xcodebuild -version
+      - name: 下载 Metal 工具链
+        # Xcode 26 起 Metal 工具链不随 Xcode 预装；播放器依赖里有 .metal 着色器，缺了会编译失败
+        script: |
+          xcodebuild -downloadComponent MetalToolchain || {
+            # 偶尔直接下载失败：先导出再导入
+            xcodebuild -downloadComponent MetalToolchain -exportPath /tmp/metal
+            xcodebuild -importComponent MetalToolchain -importPath /tmp/metal/*.exportedBundle
+          }
+          xcrun -f metal
       - name: 生成工程
         script: |
           brew install xcodegen
