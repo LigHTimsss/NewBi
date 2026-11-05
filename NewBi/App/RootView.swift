@@ -27,6 +27,8 @@ struct RootView: View {
     @State private var path = NavigationPath()
     /// 递增即让动态页刷新：有红点时切过去、或在动态页再点一次「动态」
     @State private var dynamicRefresh = 0
+    /// 正在滑出的那一页（切换动画期间可见），动画结束清空
+    @State private var leaving: AppTab?
     @Environment(SessionStore.self) private var session
     @Namespace private var searchTransition
     @Environment(\.scenePhase) private var scenePhase
@@ -36,10 +38,16 @@ struct RootView: View {
             GeometryReader { geo in
                 ZStack {
                     ForEach(AppTab.allCases) { item in
-                        page(item)
+                        // 切页只动两页：离开的和要去的。跨页（首页 → 我的）时中间那页不再整页扫过屏幕，
+                        // 其余页透明（不参与合成）；偏移限制在 ±1 屏，目标页总是从相邻位置滑进来
+                        let visible = item == tab || item == leaving
+                        TabPage(key: item == .dynamic ? dynamicRefresh : 0) { page(item) }
+                            .equatable()
                             .miniPlayerInset(66)
                             .frame(width: geo.size.width)
-                            .offset(x: CGFloat(item.rawValue - tab.rawValue) * geo.size.width)
+                            .opacity(visible ? 1 : 0)
+                            .animation(nil, value: visible)
+                            .offset(x: CGFloat(max(-1, min(1, item.rawValue - tab.rawValue))) * geo.size.width)
                             .allowsHitTesting(item == tab)
                             .accessibilityHidden(item != tab)
                     }
@@ -153,6 +161,29 @@ struct RootView: View {
         if item == .dynamic, tab == .dynamic || DynamicBadge.shared.hasNew {
             dynamicRefresh += 1
         }
-        withAnimation(Motion.tab) { tab = item }
+        guard item != tab else { return }
+        leaving = tab
+        withAnimation(Motion.tab, completionCriteria: .logicallyComplete) {
+            tab = item
+        } completion: {
+            // 连点时只收尾最后一次切换
+            if tab == item { leaving = nil }
+        }
     }
+}
+
+/// 根 Tab 的页面外壳：只在 key 变化时重算页面内容。
+/// 切 Tab 时 RootView 会重算，页面参数里的闭包每次都是新的，不隔开的话首页、动态的整页 body 都会跟着重跑
+private struct TabPage<Content: View>: View, Equatable {
+    let key: Int
+    let content: () -> Content
+
+    init(key: Int, @ViewBuilder content: @escaping () -> Content) {
+        self.key = key
+        self.content = content
+    }
+
+    var body: some View { content() }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.key == rhs.key }
 }
