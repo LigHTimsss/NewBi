@@ -442,7 +442,6 @@ struct SpaceView: View {
         .padding(.horizontal, 12)
     }
 
-    @ViewBuilder
     /// 明显的横向滑动才切换（竖向照常滚动页面）；从左边缘开始的留给侧滑返回
     private var tabSwipe: some Gesture {
         DragGesture(minimumDistance: 24)
@@ -459,6 +458,7 @@ struct SpaceView: View {
             }
     }
 
+    @ViewBuilder
     private var tabContent: some View {
         switch tab {
         case .home: SpaceHome(model: model, showAll: { withAnimation(Motion.tab) { tab = .videos } })
