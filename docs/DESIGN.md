@@ -38,13 +38,13 @@
 
 ### MVP（约 4–6 周）
 - [x] 骨架：Liquid Glass 导航、频道横滑、深/浅色、4 种强调色
-- [x] 扫码登录 + 游客模式（含同机"保存二维码"方案）
+- [x] 扫码登录、密码登录、短信验证码登录（极验人机验证）+ 游客模式（含同机"保存二维码"方案）
 - [x] 首页推荐、热门（双列卡片、下拉刷新、无限加载）
 - [x] 视频详情：UP 主、三连统计、相关推荐
 - [x] 播放：MP4 直链、进度拖动、双击暂停、弹幕开关
 - [x] 弹幕：分段懒加载、滚动/顶部/底部轨道、屏蔽规则
 - [x] 横屏全屏播放器：手势、锁屏、右侧玻璃抽屉（弹幕设置 / 画质 / 倍速 / 更多）、右侧评论浮窗（不退出全屏）、发弹幕
-- [x] 画中画、后台播放开关、定时关闭、投屏（AirPlay）
+- [x] 画中画（可设置退到后台时是否自动进入）、后台播放开关、定时关闭、投屏（AirPlay）
 - [x] 搜索：历史、热搜、联想词、视频 / UP 主结果、排序、关键词高亮
 - [x] 评论：热度 / 时间排序、置顶、表情图文混排、楼中楼、点赞、发评论与回复
 - [x] UP 主空间：头图、资料、认证、粉丝/关注/获赞、关注与取关、主页（置顶/代表作/最近投稿）、投稿（排序 + 分页）
@@ -107,7 +107,13 @@
 
 ### 4.3 扫码登录
 `qrcode/generate` → 每 2 秒 `qrcode/poll`（`0` 成功 / `86101` 未扫 / `86090` 已扫待确认 / `86038` 过期）→ Set-Cookie 下发 `SESSDATA`、`bili_jct`。
-**同一台 iPhone 的问题**：提供"保存二维码"，再到官方 App「扫一扫 → 相册」识别。
+**同一台 iPhone 的问题**：提供"保存二维码"，再到官方 App「扫一扫 → 相册」识别；或者用密码 / 短信验证码登录（4.3.1）。
+
+#### 4.3.1 密码 / 短信验证码登录（`Core/Auth/AccountLogin.swift` · `Features/Mine/LoginView.swift`）
+都是网页端接口，提交前要完成一次极验人机验证：`/x/passport-login/captcha?source=main_web` 拿 `gt`、`challenge`、`token` → 在网页里加载极验官方脚本（`static.geetest.com/static/tools/gt.js`，bind 模式），用户完成拼图得到 `challenge / validate / seccode`。人机验证由用户自己完成，App 不绕过
+- **密码**：验证通过后再取 `/x/passport-login/web/key`（公钥 + 盐，盐约 20 秒有效）→ RSA PKCS#1 v1.5 加密「盐 + 密码」→ `POST /x/passport-login/web/login`（`username`、`password`、`keep`、`token`、`challenge`、`validate`、`seccode`、`source=main_web`）。`data.status` 非 0 表示这次登录要额外验证（风险账号、新设备），提示改用验证码或扫码
+- **短信**：验证通过后 `POST /x/passport-login/web/sms/send`（`cid`、`tel`、`source`、`token`、`challenge`、`validate`、`seccode`）拿 `captcha_key`，60 秒后可重发 → `POST /x/passport-login/web/login/sms`（`cid`、`tel`、`code`、`source`、`captcha_key`、`keep`）
+- 两个登录接口都带 `Origin` / `Referer: https://www.bilibili.com`；成功后 Cookie 进共享 Cookie 存储，`refresh_token` 进 Keychain。密码只在内存里待到提交为止，不保存、不打印
 
 ### 4.4 接口清单
 
@@ -399,6 +405,8 @@ seg.so ──▶ 手写 Protobuf 解析（后台线程）──▶ 按时间排�
 - 远程命令：播放 / 暂停、前进 / 后退 10 秒、拖动进度、切倍速、上一 / 下一 P
 - 只服务最近开始播放的播放器；只在播放状态、拖动、倍速、时长变化时写入，系统自己推算进度，不跟时钟刷新
 - 封面图回调在任意线程，`MPMediaItemArtwork` 在 nonisolated 函数里创建，避免 Swift 6 主线程隔离导致的崩溃
+- 灵动岛：系统用同一份「正在播放」信息同时驱动锁屏、控制中心和灵动岛，没有只关掉灵动岛的接口；App 在前台时灵动岛不显示，退到后台继续播放时才出现
+- 设置「退到后台时自动画中画」（默认开）：播放中回到主屏幕时缩成画中画；关掉后按「后台播放」决定只出声还是暂停
 
 **视频舞台**（`Features/Player/VideoStage.swift`）：视频页、迷你胶囊、两者之间的过渡是同一个东西
 - **为什么不用系统 zoom 转场**：它的来源 id 在推入时就定死，找不到来源（胶囊不在当前页面里）就退化成淡出，结果就是「视频先消失、胶囊再冒出来」。现在视频页不进导航栈，而是 RootView 最上层的一块全屏「舞台」，每一帧的形状都由自己算
@@ -501,7 +509,7 @@ NewBi/
     │   ├── Media/      LocalMediaServer.swift（127.0.0.1 媒体代理，含本地文件）
     │   ├── Downloads/  DownloadManager.swift（后台下载）· DownloadRecord.swift
     │   ├── Models/     Video.swift · Search.swift · Comment.swift · Space.swift · Library.swift · Dynamic.swift
-    │   └── Auth/       QRLoginModel.swift · Credentials.swift（Keychain、Cookie 刷新）
+    │   └── Auth/       QRLoginModel.swift · Credentials.swift（Keychain、Cookie 刷新）· AccountLogin.swift（密码 / 短信登录）
     └── Features/
         ├── Home/       HomeView.swift
         ├── Video/      VideoDetailView.swift
@@ -512,7 +520,7 @@ NewBi/
         ├── Comments/   CommentModel.swift · CommentViews.swift
         ├── Space/      SpaceView.swift（含 SpaceModel）· RelationModel.swift（含 FollowButton）· RelationListView.swift（关注 / 粉丝列表）
         ├── Library/    HistoryView.swift · WatchLaterView.swift · FavoritesView.swift（含收藏夹详情）· FavoriteSheet.swift · DownloadsView.swift（含缓存画质面板）
-        ├── Mine/       MineView.swift（含 LoginView）· QRScanner.swift（扫一扫）
+        ├── Mine/       MineView.swift · LoginView.swift（扫码 / 密码 / 验证码，含极验页）· QRScanner.swift（扫一扫）
         └── Settings/   SettingsView.swift
 ```
 
@@ -536,7 +544,7 @@ NewBi/
 | 风险 | 对策 |
 |---|---|
 | 接口变更 / 风控 | 接口集中在 `Endpoint`；补齐 buvid、WBI；控制频率 |
-| 账号安全 | 只用官方扫码登录；Cookie 由系统 Cookie 存储保管（沙盒 + 数据保护），`refresh_token` 存 Keychain（仅本机），退出时全部清除（§9） |
+| 账号安全 | 官方扫码登录，或网页端密码 / 短信验证码登录（极验由用户完成，密码只用 B 站公钥加密后提交、不保存）；Cookie 由系统 Cookie 存储保管（沙盒 + 数据保护），`refresh_token` 存 Keychain（仅本机），退出时全部清除（§9） |
 | 无法上架 | 个人自用；免费账号 7 天重签，或付费账号 TestFlight |
 | DASH 复杂 | 已实现 DASH→本地 HLS + FFmpeg 兜底引擎，失败逐级降级 |
 | **Windows 开发环境** | iOS 编译**必须在 macOS + Xcode 26**；Windows 可写代码，构建用 Mac 或云端 macOS CI |

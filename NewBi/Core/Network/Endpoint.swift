@@ -24,6 +24,16 @@ extension Endpoint {
         Endpoint(host: passport, path: "/x/passport-login/web/qrcode/poll", query: ["qrcode_key": key])
     }
 
+    // MARK: 密码 / 短信验证码登录（网页端接口）
+
+    /// 极验人机验证参数（gt、challenge、token）
+    static let loginCaptcha = Endpoint(host: passport, path: "/x/passport-login/captcha", query: ["source": "main_web"])
+    /// 密码加密用的 RSA 公钥和盐（盐约 20 秒内有效）
+    static let loginKey = Endpoint(host: passport, path: "/x/passport-login/web/key")
+    static let passwordLogin = Endpoint(host: passport, path: "/x/passport-login/web/login")
+    static let smsSend = Endpoint(host: passport, path: "/x/passport-login/web/sms/send")
+    static let smsLogin = Endpoint(host: passport, path: "/x/passport-login/web/login/sms")
+
     // MARK: Cookie 刷新
 
     static func cookieInfo(csrf: String) -> Endpoint {

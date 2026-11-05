@@ -13,17 +13,25 @@ struct MineView: View {
     @State private var scanned: URL?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                header
-                if session.isLoggedIn, let mid = session.mid { stats(mid: mid) }
-                shortcuts
-                moreRows
-            }
-            .padding(.horizontal, 16)
+        let content = VStack(spacing: 20) {
+            header
+            if session.isLoggedIn, let mid = session.mid { stats(mid: mid) }
+            shortcuts
+            moreRows
         }
-        .contentMargins(.top, 56, for: .scrollContent)
-        .contentMargins(.bottom, 96, for: .scrollContent)
+        .padding(.horizontal, 16)
+
+        // 内容放得下一屏时直接排在页面上，不放进滚动视图：真机逐项排查过，滚动视图里的内容
+        // 跟着整页平移时，低电量模式下切到「我的」会掉帧；放不下（大字号）时才用滚动视图
+        ViewThatFits(in: .vertical) {
+            content
+                .padding(.top, 56)
+                .padding(.bottom, 96)
+                .frame(maxHeight: .infinity, alignment: .top)
+            ScrollView { content }
+                .contentMargins(.top, 56, for: .scrollContent)
+                .contentMargins(.bottom, 96, for: .scrollContent)
+        }
         .overlay(alignment: .topTrailing) { toolGroup.padding(.trailing, 16) }
         .sheet(isPresented: $showLogin) { LoginView() }
         .fullScreenCover(isPresented: $showScanner, onDismiss: openScanned) {
@@ -86,7 +94,7 @@ struct MineView: View {
                         .foregroundStyle(Theme.secondaryText)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("点击登录").font(.system(size: 20, weight: .bold))
-                        Text("扫码登录，同步关注与历史").font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                        Text("扫码、密码或验证码登录，同步关注与历史").font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
                     }
                     Spacer()
                     Image(systemName: "chevron.right").foregroundStyle(Theme.secondaryText)
@@ -222,78 +230,5 @@ struct MineView: View {
             .foregroundStyle(.primary)
         }
         .background(Theme.card, in: .rect(cornerRadius: 22))
-    }
-}
-
-struct LoginView: View {
-    @Environment(SessionStore.self) private var session
-    @Environment(\.dismiss) private var dismiss
-    @State private var model = QRLoginModel()
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("扫码登录").font(.serif(24)).tracking(2).padding(.top, 32)
-
-            ZStack {
-                RoundedRectangle(cornerRadius: 20).fill(.white)
-                if let image = model.qrImage {
-                    Image(uiImage: image)
-                        .interpolation(.none)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(16)
-                        .blur(radius: model.phase == .expired ? 6 : 0)
-                } else {
-                    ProgressView()
-                }
-            }
-            .frame(width: 220, height: 220)
-            .animation(Motion.component, value: model.phase)
-
-            Text(statusText)
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.secondaryText)
-                .contentTransition(.opacity)
-
-            HStack(spacing: 12) {
-                if model.phase == .expired {
-                    Button("刷新二维码") { model.start() }
-                }
-                // 同一台 iPhone：保存二维码后在官方 App「扫一扫 → 相册」识别
-                if let image = model.qrImage {
-                    ShareLink(item: Image(uiImage: image), preview: SharePreview("登录二维码", image: Image(uiImage: image))) {
-                        Label("保存二维码", systemImage: "square.and.arrow.down")
-                    }
-                }
-            }
-            .buttonStyle(.glass)
-
-            Text("仅使用官方扫码登录，不会接触你的账号密码")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.secondaryText)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-        .presentationDetents([.medium, .large])
-        .onAppear { model.start() }
-        .onDisappear { model.stop() }
-        .onChange(of: model.phase) { _, phase in
-            guard phase == .success else { return }
-            Task {
-                await session.didLogin()
-                dismiss()
-            }
-        }
-    }
-
-    private var statusText: String {
-        switch model.phase {
-        case .loading: "正在生成二维码…"
-        case .waiting: "请使用哔哩哔哩 App 扫码"
-        case .scanned: "已扫码，请在手机上确认"
-        case .expired: "二维码已过期"
-        case .success: "登录成功"
-        case .failed(let message): message
-        }
     }
 }

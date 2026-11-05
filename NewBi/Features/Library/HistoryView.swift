@@ -237,7 +237,7 @@ private struct HistoryRow: View {
     }
 }
 
-/// 未登录时的占位：说明 + 扫码登录
+/// 未登录时的占位：说明 + 登录（扫码 / 密码 / 验证码）
 struct LoginPrompt: View {
     let message: String
     @State private var showLogin = false
@@ -248,7 +248,7 @@ struct LoginPrompt: View {
         } description: {
             Text(message)
         } actions: {
-            Button("扫码登录") { showLogin = true }.buttonStyle(.glass)
+            Button("登录") { showLogin = true }.buttonStyle(.glass)
         }
         .sheet(isPresented: $showLogin) { LoginView() }
     }

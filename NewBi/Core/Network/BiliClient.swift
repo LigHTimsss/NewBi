@@ -55,8 +55,9 @@ actor BiliClient {
     }
 
     /// 表单 POST，需要返回的 data（如发评论后拿到新评论）
-    func post<T: Decodable & Sendable>(_ endpoint: Endpoint, form: [String: String], as type: T.Type) async throws -> T {
-        let decoded = try decoder.decode(BiliResponse<T>.self, from: await postData(endpoint, form: form))
+    /// - Parameter headers: 额外的请求头（登录接口要带 Origin）
+    func post<T: Decodable & Sendable>(_ endpoint: Endpoint, form: [String: String], as type: T.Type, headers: [String: String] = [:]) async throws -> T {
+        let decoded = try decoder.decode(BiliResponse<T>.self, from: await postData(endpoint, form: form, headers: headers))
         guard decoded.code == 0 else { throw BiliError.api(code: decoded.code, message: decoded.message) }
         guard let result = decoded.data else { throw BiliError.emptyData }
         return result
@@ -85,10 +86,11 @@ actor BiliClient {
         let message: String
     }
 
-    private func postData(_ endpoint: Endpoint, form: [String: String]) async throws -> Data {
+    private func postData(_ endpoint: Endpoint, form: [String: String], headers: [String: String] = [:]) async throws -> Data {
         var request = URLRequest(url: try await url(for: endpoint))
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         request.httpBody = Data(form.map { "\($0.key.formEncoded)=\($0.value.formEncoded)" }.joined(separator: "&").utf8)
         let (data, response) = try await session.data(for: request)
         try Self.check(response)

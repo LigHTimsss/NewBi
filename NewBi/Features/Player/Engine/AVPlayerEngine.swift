@@ -14,14 +14,22 @@ final class AVPlayerEngine: PlaybackEngine {
     private var statusObservation: NSKeyValueObservation?
     private var displayObservation: NSKeyValueObservation?
     private var itemObservers: [NSObjectProtocol] = []
+    private var defaultsObserver: NSObjectProtocol?
     private var fill = false
+
+    /// 设置「退到后台时自动画中画」（默认开）
+    nonisolated static let autoPictureInPictureKey = "autoPictureInPicture"
 
     init() {
         videoView.playerLayer.player = player
         videoView.playerLayer.videoGravity = .resizeAspect
         if AVPictureInPictureController.isPictureInPictureSupported() {
             pip = AVPictureInPictureController(playerLayer: videoView.playerLayer)
-            pip?.canStartPictureInPictureAutomaticallyFromInline = true
+            applyAutoPictureInPicture()
+            // 播放中在设置里改了开关：立即生效，不用重开视频
+            defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.applyAutoPictureInPicture() }
+            }
         }
         // 第一帧可显示：图层换了播放项后会先变回 false，新一项出帧后再变 true
         // KVO 可能在任意线程回调：回到主线程后按图层「此刻」的状态判断（届时若已换了新一项，它会是 false）
@@ -129,8 +137,21 @@ final class AVPlayerEngine: PlaybackEngine {
 
     func teardown() {
         removeItemObservers()
+        if let defaultsObserver {
+            NotificationCenter.default.removeObserver(defaultsObserver)
+            self.defaultsObserver = nil
+        }
         player.pause()
         player.replaceCurrentItem(with: nil)
+    }
+
+    /// 播放中回到主屏幕时是否自动缩成画中画（关掉后按「后台播放」决定是只出声还是暂停）
+    private func applyAutoPictureInPicture() {
+        guard let pip else { return }
+        let enabled = UserDefaults.standard.object(forKey: Self.autoPictureInPictureKey) as? Bool ?? true
+        if pip.canStartPictureInPictureAutomaticallyFromInline != enabled {
+            pip.canStartPictureInPictureAutomaticallyFromInline = enabled
+        }
     }
 
     private func isCurrent(_ itemID: ObjectIdentifier) -> Bool {

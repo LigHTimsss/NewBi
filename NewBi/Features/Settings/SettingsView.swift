@@ -11,6 +11,8 @@ struct SettingsView: View {
     @AppStorage("autoplay") private var autoplay = true
     @AppStorage("cellularAlert") private var cellularAlert = false
     @AppStorage("backgroundPlay") private var backgroundPlay = true
+    /// 播放中回到主屏幕时自动进入画中画（系统播放器）；关掉后按「后台播放」只出声或暂停
+    @AppStorage(AVPlayerEngine.autoPictureInPictureKey) private var autoPictureInPicture = true
     /// 播放中返回时缩成迷你播放条继续播
     @AppStorage("miniPlayer") private var miniPlayer = true
     /// 多 P 视频播完自动播下一 P
@@ -86,6 +88,8 @@ struct SettingsView: View {
                     Toggle("自动播放", isOn: $autoplay).frame(minHeight: 50)
                     divider
                     Toggle("后台播放", isOn: $backgroundPlay).frame(minHeight: 50)
+                    divider
+                    Toggle("退到后台时自动画中画", isOn: $autoPictureInPicture).frame(minHeight: 50)
                     divider
                     Toggle("返回时小窗继续播放", isOn: $miniPlayer).frame(minHeight: 50)
                     divider

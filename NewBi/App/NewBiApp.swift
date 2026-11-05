@@ -75,7 +75,7 @@ final class SessionStore {
         }
     }
 
-    /// 扫码登录成功：作废登录前还在途的查询（它们可能带回「未登录」）
+    /// 登录成功（扫码 / 密码 / 验证码）：作废登录前还在途的查询（它们可能带回「未登录」）
     func didLogin() async {
         generation += 1
         await refresh()
