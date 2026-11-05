@@ -7,40 +7,19 @@ struct MineView: View {
     @Environment(\.colorScheme) private var scheme
     @AppStorage("appearance") private var appearance = 0
     @State private var showLogin = false
-    // 临时性能诊断开关（设置页底部）
-    @AppStorage(Diagnostics.mineNoStats) private var diagNoStats = false
-    @AppStorage(Diagnostics.mineNoShortcuts) private var diagNoShortcuts = false
-    @AppStorage(Diagnostics.mineNoSettingsRow) private var diagNoSettingsRow = false
-    @AppStorage(Diagnostics.minePlainButtons) private var diagPlainButtons = false
-    @AppStorage(Diagnostics.mineFitNoScroll) private var diagFitNoScroll = false
 
     var body: some View {
-        let content = VStack(spacing: 20) {
-            header
-            if session.isLoggedIn, !diagNoStats { stats }
-            if !diagNoShortcuts { shortcuts }
-            if !diagNoSettingsRow { moreRows }
-        }
-        .padding(.horizontal, 16)
-
-        let scroll = ScrollView { content }
-            .contentMargins(.top, 56, for: .scrollContent)
-            .contentMargins(.bottom, 96, for: .scrollContent)
-
-        Group {
-            if diagFitNoScroll {
-                // 候选修复：放得下就直接排在页面上，放不下（小屏 / 大字号）才用滚动视图
-                ViewThatFits(in: .vertical) {
-                    content
-                        .padding(.top, 56)
-                        .padding(.bottom, 96)
-                        .frame(maxHeight: .infinity, alignment: .top)
-                    scroll
-                }
-            } else {
-                scroll
+        ScrollView {
+            VStack(spacing: 20) {
+                header
+                if session.isLoggedIn { stats }
+                shortcuts
+                moreRows
             }
+            .padding(.horizontal, 16)
         }
+        .contentMargins(.top, 56, for: .scrollContent)
+        .contentMargins(.bottom, 96, for: .scrollContent)
         .overlay(alignment: .topTrailing) { toolGroup.padding(.trailing, 16) }
         .sheet(isPresented: $showLogin) { LoginView() }
     }
@@ -68,7 +47,7 @@ struct MineView: View {
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 42, height: 40)
         }
-        .diagnosticPressable(plain: diagPlainButtons)
+        .buttonStyle(PressableStyle())
         .accessibilityLabel(label)
     }
 
@@ -125,7 +104,7 @@ struct MineView: View {
                 }
                 .contentShape(.rect)
             }
-            .diagnosticPressable(plain: diagPlainButtons)
+            .buttonStyle(PressableStyle())
             .foregroundStyle(.primary)
             .padding(.top, 8)
         }
@@ -141,9 +120,10 @@ struct MineView: View {
 
     private func stat(_ value: Int?, _ title: String) -> some View {
         VStack(spacing: 2) {
+            // 不挂数字滚动效果：数据刷新本来就不带动画，这个效果从没显示过；
+            // 挂着时低电量模式下切到「我的」整页平移会明显掉帧（真机逐项排查确认）
             Text(value?.biliCount ?? "-")
                 .font(.system(size: 19, weight: .bold))
-                .contentTransition(.numericText())
             Text(title).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
         }
         .frame(maxWidth: .infinity)
@@ -173,10 +153,10 @@ struct MineView: View {
         .contentShape(.rect)
 
         if let route {
-            NavigationLink(value: route) { label }.diagnosticPressable(plain: diagPlainButtons)
+            NavigationLink(value: route) { label }.buttonStyle(PressableStyle())
         } else {
             // 离线缓存、稍后再看：后续版本
-            Button {} label: { label }.diagnosticPressable(plain: diagPlainButtons)
+            Button {} label: { label }.buttonStyle(PressableStyle())
         }
     }
 

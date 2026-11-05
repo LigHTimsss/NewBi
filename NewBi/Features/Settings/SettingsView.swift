@@ -22,12 +22,6 @@ struct SettingsView: View {
     @AppStorage("codecPreference") private var codecPreference = "auto"
     /// 自动：系统播放器失败时切 FFmpeg；FFmpeg 不支持系统画中画
     @AppStorage("enginePreference") private var enginePreference = "auto"
-    // 临时：定位低电量模式切到「我的」卡顿，每次只开一个
-    @AppStorage(Diagnostics.mineNoStats) private var diagNoStats = false
-    @AppStorage(Diagnostics.mineNoShortcuts) private var diagNoShortcuts = false
-    @AppStorage(Diagnostics.mineNoSettingsRow) private var diagNoSettingsRow = false
-    @AppStorage(Diagnostics.minePlainButtons) private var diagPlainButtons = false
-    @AppStorage(Diagnostics.mineFitNoScroll) private var diagFitNoScroll = false
 
     var body: some View {
         ScrollView {
@@ -106,24 +100,6 @@ struct SettingsView: View {
                     row("清理存储空间", value: nil)
                     divider
                     row("关于", value: "版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "-")")
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("性能诊断（临时，每次只开一个）")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.secondaryText)
-                        .padding(.leading, 16)
-                    group {
-                        Toggle("不显示动态 / 关注 / 粉丝数", isOn: $diagNoStats).frame(minHeight: 50)
-                        divider
-                        Toggle("不显示四个入口", isOn: $diagNoShortcuts).frame(minHeight: 50)
-                        divider
-                        Toggle("不显示「设置」行", isOn: $diagNoSettingsRow).frame(minHeight: 50)
-                        divider
-                        Toggle("按钮去掉按压效果", isOn: $diagPlainButtons).frame(minHeight: 50)
-                        divider
-                        Toggle("候选修复：放得下时不用滚动视图", isOn: $diagFitNoScroll).frame(minHeight: 50)
-                    }
-                    .tint(accent)
                 }
                 if session.isLoggedIn {
                     group {
