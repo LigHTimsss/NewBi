@@ -38,15 +38,30 @@ final class PlayQueue {
     }
 }
 
-/// 视频页简介里的队列位置：「稍后再看 · 连播中 3 / 12 · 下一个 xxx」
+/// 视频页简介里的队列位置：「稍后再看 · 连播中 3 / 12 · 下一个 xxx」。点开是整个队列，点哪个看哪个
 struct QueueStrip: View {
     let bvid: String
+    @State private var showList = false
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let queue = PlayQueue.shared
         if let index = queue.position(of: bvid) {
+            Button { showList = true } label: { strip(queue, index: index) }
+                .buttonStyle(PressableStyle())
+                .foregroundStyle(.primary)
+                .accessibilityHint("查看并选择连播列表里的视频")
+                .sheet(isPresented: $showList) {
+                    QueueList(current: bvid) { card in
+                        showList = false
+                        VideoStage.shared.advance(to: card)
+                    }
+                }
+        }
+    }
+
+    private func strip(_ queue: PlayQueue, index: Int) -> some View {
             HStack(spacing: 8) {
                 Image(systemName: "list.bullet.below.rectangle")
                     .foregroundStyle(accent.accentText(scheme))
@@ -62,11 +77,61 @@ struct QueueStrip: View {
                     Text("已是最后一个").font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
                 }
                 Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.secondaryText)
             }
             .padding(.horizontal, 12)
             .frame(height: 38)
             .background(Theme.separator.opacity(0.5), in: .capsule)
+            .contentShape(.capsule)
+    }
+}
+
+/// 连播列表面板：当前这个高亮并自动滚到可见处，点其它的就在视频页里原地换过去
+private struct QueueList: View {
+    let current: String
+    var onSelect: (VideoCard) -> Void
+    @Environment(\.accent) private var accent
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let queue = PlayQueue.shared
+        NavigationStack {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(Array(queue.cards.enumerated()), id: \.element.bvid) { index, card in
+                            let playing = card.bvid == current
+                            Button { if !playing { onSelect(card) } } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Text("\(index + 1)")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .monospacedDigit()
+                                        .foregroundStyle(playing ? accent.accentText(scheme) : Theme.secondaryText)
+                                        .frame(width: 24)
+                                        .padding(.top, 6)
+                                    VideoRow(card: card, subtitle: playing ? "正在播放" : nil)
+                                }
+                                .padding(8)
+                                .background(playing ? accent.opacity(0.1) : Color.clear, in: .rect(cornerRadius: 14))
+                                .contentShape(.rect)
+                            }
+                            .buttonStyle(PressableStyle())
+                            .foregroundStyle(.primary)
+                            .id(card.bvid)
+                            .accessibilityAddTraits(playing ? .isSelected : [])
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+                .onAppear { proxy.scrollTo(current, anchor: .center) }
+            }
+            .navigationTitle("\(queue.title) · \(queue.cards.count) 个")
+            .navigationBarTitleDisplayMode(.inline)
         }
+        .presentationDetents([.medium, .large])
     }
 }
 
