@@ -8,36 +8,40 @@ struct MineView: View {
     @AppStorage("appearance") private var appearance = 0
     @State private var showLogin = false
     // 临时性能诊断开关（设置页底部）
-    @AppStorage(Diagnostics.mineNoHeader) private var diagNoHeader = false
-    @AppStorage(Diagnostics.mineNoCards) private var diagNoCards = false
-    @AppStorage(Diagnostics.mineNoScroll) private var diagNoScroll = false
-    @AppStorage(Diagnostics.mineNoToolbar) private var diagNoToolbar = false
+    @AppStorage(Diagnostics.mineNoStats) private var diagNoStats = false
+    @AppStorage(Diagnostics.mineNoShortcuts) private var diagNoShortcuts = false
+    @AppStorage(Diagnostics.mineNoSettingsRow) private var diagNoSettingsRow = false
+    @AppStorage(Diagnostics.minePlainButtons) private var diagPlainButtons = false
+    @AppStorage(Diagnostics.mineFitNoScroll) private var diagFitNoScroll = false
 
     var body: some View {
         let content = VStack(spacing: 20) {
-            if !diagNoHeader { header }
-            if !diagNoCards {
-                if session.isLoggedIn { stats }
-                shortcuts
-                moreRows
-            }
+            header
+            if session.isLoggedIn, !diagNoStats { stats }
+            if !diagNoShortcuts { shortcuts }
+            if !diagNoSettingsRow { moreRows }
         }
         .padding(.horizontal, 16)
 
+        let scroll = ScrollView { content }
+            .contentMargins(.top, 56, for: .scrollContent)
+            .contentMargins(.bottom, 96, for: .scrollContent)
+
         Group {
-            if diagNoScroll {
-                content
-                    .padding(.top, 56)
-                    .frame(maxHeight: .infinity, alignment: .top)
+            if diagFitNoScroll {
+                // 候选修复：放得下就直接排在页面上，放不下（小屏 / 大字号）才用滚动视图
+                ViewThatFits(in: .vertical) {
+                    content
+                        .padding(.top, 56)
+                        .padding(.bottom, 96)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                    scroll
+                }
             } else {
-                ScrollView { content }
-                    .contentMargins(.top, 56, for: .scrollContent)
-                    .contentMargins(.bottom, 96, for: .scrollContent)
+                scroll
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if !diagNoToolbar { toolGroup.padding(.trailing, 16) }
-        }
+        .overlay(alignment: .topTrailing) { toolGroup.padding(.trailing, 16) }
         .sheet(isPresented: $showLogin) { LoginView() }
     }
 
@@ -64,7 +68,7 @@ struct MineView: View {
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 42, height: 40)
         }
-        .buttonStyle(PressableStyle())
+        .diagnosticPressable(plain: diagPlainButtons)
         .accessibilityLabel(label)
     }
 
@@ -121,7 +125,7 @@ struct MineView: View {
                 }
                 .contentShape(.rect)
             }
-            .buttonStyle(PressableStyle())
+            .diagnosticPressable(plain: diagPlainButtons)
             .foregroundStyle(.primary)
             .padding(.top, 8)
         }
@@ -169,10 +173,10 @@ struct MineView: View {
         .contentShape(.rect)
 
         if let route {
-            NavigationLink(value: route) { label }.buttonStyle(PressableStyle())
+            NavigationLink(value: route) { label }.diagnosticPressable(plain: diagPlainButtons)
         } else {
             // 离线缓存、稍后再看：后续版本
-            Button {} label: { label }.buttonStyle(PressableStyle())
+            Button {} label: { label }.diagnosticPressable(plain: diagPlainButtons)
         }
     }
 

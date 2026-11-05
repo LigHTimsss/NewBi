@@ -1,14 +1,29 @@
-import Foundation
+import SwiftUI
 
 /// 临时的性能诊断开关（只在测试分支上，定位完低电量模式切到「我的」卡顿后删除）。
-/// 上一轮：「我的」换成空白页就不卡，所以这一轮把「我的」拆开逐块去掉。每次只开一个，默认全关
+/// 第二轮：去掉卡片或去掉滚动视图都不卡 → 问题是「卡片放在滚动视图里」。这一轮再拆卡片，并试一个候选修复。
+/// 每次只开一个，默认全关
 enum Diagnostics {
-    /// 不显示头部（头像、昵称、等级、硬币）
-    static let mineNoHeader = "diag.mineNoHeader"
-    /// 不显示数据、入口卡片和「设置」行
-    static let mineNoCards = "diag.mineNoCards"
-    /// 不用 ScrollView，内容直接排在页面上
-    static let mineNoScroll = "diag.mineNoScroll"
-    /// 不显示右上角工具条（整个去掉，不只是玻璃）
-    static let mineNoToolbar = "diag.mineNoToolbar"
+    /// 不显示动态 / 关注 / 粉丝三项数据（数字滚动效果）
+    static let mineNoStats = "diag.mineNoStats"
+    /// 不显示四个入口（离线缓存、历史…）
+    static let mineNoShortcuts = "diag.mineNoShortcuts"
+    /// 不显示下面的「设置」行
+    static let mineNoSettingsRow = "diag.mineNoSettingsRow"
+    /// 「我的」里的按钮去掉按压缩放 / 提亮效果
+    static let minePlainButtons = "diag.minePlainButtons"
+    /// 候选修复：内容放得下一屏时不用滚动视图
+    static let mineFitNoScroll = "diag.mineFitNoScroll"
+}
+
+extension View {
+    /// 诊断：按开关用普通按钮样式代替按压效果
+    @ViewBuilder
+    func diagnosticPressable(plain: Bool) -> some View {
+        if plain {
+            buttonStyle(.plain)
+        } else {
+            buttonStyle(PressableStyle())
+        }
+    }
 }

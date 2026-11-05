@@ -23,10 +23,11 @@ struct SettingsView: View {
     /// 自动：系统播放器失败时切 FFmpeg；FFmpeg 不支持系统画中画
     @AppStorage("enginePreference") private var enginePreference = "auto"
     // 临时：定位低电量模式切到「我的」卡顿，每次只开一个
-    @AppStorage(Diagnostics.mineNoHeader) private var diagNoHeader = false
-    @AppStorage(Diagnostics.mineNoCards) private var diagNoCards = false
-    @AppStorage(Diagnostics.mineNoScroll) private var diagNoScroll = false
-    @AppStorage(Diagnostics.mineNoToolbar) private var diagNoToolbar = false
+    @AppStorage(Diagnostics.mineNoStats) private var diagNoStats = false
+    @AppStorage(Diagnostics.mineNoShortcuts) private var diagNoShortcuts = false
+    @AppStorage(Diagnostics.mineNoSettingsRow) private var diagNoSettingsRow = false
+    @AppStorage(Diagnostics.minePlainButtons) private var diagPlainButtons = false
+    @AppStorage(Diagnostics.mineFitNoScroll) private var diagFitNoScroll = false
 
     var body: some View {
         ScrollView {
@@ -112,13 +113,15 @@ struct SettingsView: View {
                         .foregroundStyle(Theme.secondaryText)
                         .padding(.leading, 16)
                     group {
-                        Toggle("「我的」不显示头像那一块", isOn: $diagNoHeader).frame(minHeight: 50)
+                        Toggle("不显示动态 / 关注 / 粉丝数", isOn: $diagNoStats).frame(minHeight: 50)
                         divider
-                        Toggle("「我的」不显示数据和入口卡片", isOn: $diagNoCards).frame(minHeight: 50)
+                        Toggle("不显示四个入口", isOn: $diagNoShortcuts).frame(minHeight: 50)
                         divider
-                        Toggle("「我的」不用滚动视图", isOn: $diagNoScroll).frame(minHeight: 50)
+                        Toggle("不显示「设置」行", isOn: $diagNoSettingsRow).frame(minHeight: 50)
                         divider
-                        Toggle("「我的」不显示右上角工具条", isOn: $diagNoToolbar).frame(minHeight: 50)
+                        Toggle("按钮去掉按压效果", isOn: $diagPlainButtons).frame(minHeight: 50)
+                        divider
+                        Toggle("候选修复：放得下时不用滚动视图", isOn: $diagFitNoScroll).frame(minHeight: 50)
                     }
                     .tint(accent)
                 }
