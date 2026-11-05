@@ -271,16 +271,17 @@ final class DanmakuEngine {
         }
         prefetchCursor = index
         guard !jobs.isEmpty else { return }
-        let scale = scale, generation = renderGeneration
+        // 交给后台的是不可变的一份（捕获 var 会被 Swift 6 判为和主线程共享可变状态）
+        let batch = jobs, scale = scale, generation = renderGeneration
         Task {
             let results = await Task.detached(priority: .utility) { () -> [(String, Rendered)] in
-                jobs.compactMap { job in
+                batch.compactMap { job in
                     DanmakuEngine.rasterize(job.content, color: job.color, fontSize: job.fontSize, scale: scale,
                                             inset: 2, bordered: false, time: job.time).map { (job.key, $0) }
                 }
             }.value
             guard generation == renderGeneration else { return }
-            for job in jobs { preparing.remove(job.key) }
+            for job in batch { preparing.remove(job.key) }
             for (key, rendered) in results { prepared[key] = rendered }
             if prepared.count > 240 { prepared = prepared.filter { $0.value.time >= lastTime - 1 } }
         }
