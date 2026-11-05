@@ -325,7 +325,6 @@ private struct IdleContent: View {
                                 }
                                 .buttonStyle(PressableStyle())
                                 .foregroundStyle(.primary)
-                                .riseIn(index: index)
                             }
                         }
                     }
@@ -363,7 +362,6 @@ private struct SearchResults: View {
                             }
                             .buttonStyle(PressableStyle())
                             .watchLaterMenu(video.card)
-                            .riseIn(index: index)
                             .onAppear { model.loadMore(after: video.id) }
                         }
                     case .user:
@@ -371,7 +369,6 @@ private struct SearchResults: View {
                             NavigationLink(value: Route.space(mid: user.mid)) { UserRow(user: user) }
                                 .buttonStyle(PressableStyle())
                                 .foregroundStyle(.primary)
-                                .riseIn(index: index)
                                 .onAppear { model.loadMore(after: user.id) }
                         }
                     }

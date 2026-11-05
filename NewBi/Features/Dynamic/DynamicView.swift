@@ -415,6 +415,16 @@ struct DynamicCard: View {
                 }
                 .buttonStyle(PressableStyle())
                 Spacer(minLength: 0)
+                if let pin = item.modules.pinLabel {
+                    Label(pin, systemImage: "pin.fill")
+                        .labelStyle(CompactLabelStyle())
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(accent.accentText(scheme))
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(accent.opacity(0.12), in: .capsule)
+                        .accessibilityLabel("置顶动态")
+                }
             }
         }
     }
@@ -542,6 +552,7 @@ private struct ImageGrid: View {
                     .aspectRatio(image.aspectRatio, contentMode: .fit)
                     .frame(maxWidth: image.aspectRatio < 1 ? 220 : 300)
                     .clipShape(.rect(cornerRadius: 12))
+                    .imageZoomSource(image.url)
             }
             .buttonStyle(PressableStyle())
             .accessibilityLabel("查看图片")
@@ -553,6 +564,7 @@ private struct ImageGrid: View {
                         RemoteImage(url: image.url, size: CGSize(width: 180, height: 180))
                             .aspectRatio(1, contentMode: .fit)
                             .clipShape(.rect(cornerRadius: 8))
+                            .imageZoomSource(image.url)
                     }
                     .buttonStyle(PressableStyle())
                     .accessibilityLabel("查看图片 \(index + 1)")

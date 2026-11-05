@@ -20,6 +20,12 @@ final class ImageMemory: @unchecked Sendable {
         exact.object(forKey: url as NSURL)
     }
 
+    /// 清理存储空间时一并清掉内存里的图
+    func removeAll() {
+        exact.removeAllObjects()
+        anySize.removeAllObjects()
+    }
+
     func anySize(for url: URL) -> UIImage? {
         anySize.object(forKey: Self.base(url))
     }
@@ -58,17 +64,28 @@ actor ImagePipeline {
     private static let prefetchBacklog = 30
 
     private let session: URLSession
+    /// 图片的磁盘缓存（200 MB），「设置 → 清理存储空间」里显示和清理
+    private let diskCache = URLCache(memoryCapacity: 0, diskCapacity: 200 * 1024 * 1024)
     private var inflight: [URL: Entry] = [:]
     private var prefetchQueue: [(url: URL, maxPixel: CGFloat)] = []
     private var prefetching = 0
 
     init() {
         let config = URLSessionConfiguration.default
-        config.urlCache = URLCache(memoryCapacity: 0, diskCapacity: 200 * 1024 * 1024)
+        config.urlCache = diskCache
         config.requestCachePolicy = .returnCacheDataElseLoad
         config.httpAdditionalHeaders = ["Referer": "https://www.bilibili.com/"]
         config.httpMaximumConnectionsPerHost = 6
         session = URLSession(configuration: config)
+    }
+
+    /// 图片磁盘缓存占用（字节）
+    func diskUsage() -> Int { diskCache.currentDiskUsage }
+
+    /// 清掉磁盘和内存里的图片缓存（之后用到再重新下载）
+    func clearCache() {
+        diskCache.removeAllCachedResponses()
+        ImageMemory.shared.removeAll()
     }
 
     func image(for url: URL, maxPixel: CGFloat, priority: TaskPriority = .userInitiated) async -> UIImage? {

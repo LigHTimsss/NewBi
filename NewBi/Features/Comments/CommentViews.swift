@@ -207,6 +207,7 @@ struct CommentRow: View {
                                 RemoteImage(url: picture.imgSrc, size: CGSize(width: 96, height: 96))
                                     .frame(width: 96, height: 96)
                                     .clipShape(.rect(cornerRadius: 8))
+                                    .imageZoomSource(picture.imgSrc)
                             }
                             .buttonStyle(PressableStyle())
                             .accessibilityLabel("查看图片 \(index + 1)")

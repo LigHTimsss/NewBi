@@ -101,7 +101,10 @@ struct SettingsView: View {
                 }
                 .tint(accent)
                 group {
-                    row("清理存储空间", value: nil)
+                    NavigationLink(value: Route.storage) {
+                        row("清理存储空间", value: nil).contentShape(.rect)
+                    }
+                    .foregroundStyle(.primary)
                     divider
                     row("关于", value: "版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "-")")
                 }

@@ -107,8 +107,6 @@ struct FullscreenOverlay: View {
                     .transition(.move(edge: .trailing))
                 }
             }
-            // 面板的动画只作用在面板这一层：以前挂在整个控件层上，同一次更新里其它可动画属性也会跟着走 420ms
-            .animation(Motion.tab, value: panel)
         }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
@@ -148,8 +146,16 @@ struct FullscreenOverlay: View {
     }
 
     /// 收起抽屉；`then` 在收起动画结束后才执行（换画质、改倍速这类重活不和动画抢主线程）
+    private func openPanel(_ target: PlayerPanel) {
+        withAnimation(Motion.tab) { panel = target }
+    }
+
+    /// 收起用「越来越快」的曲线：滑入的曲线前快后慢，拿来收起时最后一小段会拖着走，看起来像卡了一下再收完
+    private static let panelOut = Animation.timingCurve(0.4, 0, 0.9, 0.6, duration: 0.3)
+
     private func closePanel(then next: (@MainActor () -> Void)? = nil) {
-        withAnimation(Motion.tab, completionCriteria: .logicallyComplete) {
+        // 面板完全移除后再做重活（换画质、改倍速）：不在收起的最后一段抢主线程
+        withAnimation(Self.panelOut, completionCriteria: .removed) {
             panel = nil
         } completion: {
             next?()
@@ -267,14 +273,14 @@ struct FullscreenOverlay: View {
                 ) {
                     Task { try? await model.toggleLike() }
                 }
-                iconButton("text.bubble", "评论", count: model.comments.total ?? stat?.reply) { panel = .comments }
+                iconButton("text.bubble", "评论", count: model.comments.total ?? stat?.reply) { openPanel(.comments) }
                 iconButton(model.isFavoured ? "star.fill" : "star", "收藏",
                            count: (stat?.favorite ?? 0) + model.favDelta, tint: model.isFavoured ? accent : nil,
                            action: onFavorite)
                 if model.pages.count > 1 {
-                    iconButton("list.bullet.rectangle", "选集", width: 30) { panel = .parts }
+                    iconButton("list.bullet.rectangle", "选集", width: 30) { openPanel(.parts) }
                 }
-                iconButton("ellipsis", "更多", width: 30) { panel = .more }
+                iconButton("ellipsis", "更多", width: 30) { openPanel(.more) }
             }
         }
         .padding(.horizontal, 8)
@@ -317,7 +323,7 @@ struct FullscreenOverlay: View {
             ) {
                 player.danmakuEnabled.toggle()
             }
-            iconButton("slider.horizontal.3", "弹幕设置") { panel = .danmaku }
+            iconButton("slider.horizontal.3", "弹幕设置") { openPanel(.danmaku) }
 
             // 竖屏全屏（竖屏视频）放不下输入框：只留按钮
             if verticalSizeClass == .compact {
@@ -335,8 +341,8 @@ struct FullscreenOverlay: View {
                 Spacer(minLength: 8)
             }
 
-            textButton(player.rate == 1 ? "倍速" : player.rate.speedLabel) { panel = .speed }
-            textButton(qualityName) { panel = .quality }
+            textButton(player.rate == 1 ? "倍速" : player.rate.speedLabel) { openPanel(.speed) }
+            textButton(qualityName) { openPanel(.quality) }
         }
         .padding(.horizontal, 8)
     }

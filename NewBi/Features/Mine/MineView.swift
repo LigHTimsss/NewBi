@@ -6,11 +6,7 @@ struct MineView: View {
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
     @AppStorage("appearance") private var appearance = 0
-    @Environment(\.openURL) private var openURL
     @State private var showLogin = false
-    @State private var showScanner = false
-    /// 扫码识别出的视频 / 空间 / 网页：扫码页关掉后再打开（否则会开在扫码页底下）
-    @State private var scanned: URL?
 
     var body: some View {
         let content = VStack(spacing: 20) {
@@ -34,28 +30,14 @@ struct MineView: View {
         }
         .overlay(alignment: .topTrailing) { toolGroup.padding(.trailing, 16) }
         .sheet(isPresented: $showLogin) { LoginView() }
-        .fullScreenCover(isPresented: $showScanner, onDismiss: openScanned) {
-            QRScannerView { scanned = $0 }
-        }
-    }
-
-    private func openScanned() {
-        guard let url = scanned else { return }
-        scanned = nil
-        openURL(url)
     }
 
     private var toolGroup: some View {
         HStack(spacing: 0) {
-            toolButton("viewfinder", "扫一扫") { showScanner = true }
             // 深色时是月亮，浅色时是太阳：图标就是当前的外观
             toolButton(scheme == .dark ? "moon.fill" : "sun.max.fill", scheme == .dark ? "深色模式，点按切换为浅色" : "浅色模式，点按切换为深色") {
                 withAnimation(Motion.component) { appearance = scheme == .dark ? 1 : 2 }
             }
-            NavigationLink(value: Route.settings) {
-                Image(systemName: "gearshape").frame(width: 42, height: 40)
-            }
-            .accessibilityLabel("设置")
         }
         .font(.system(size: 18))
         .foregroundStyle(.primary)

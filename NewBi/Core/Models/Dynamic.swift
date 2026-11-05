@@ -89,14 +89,27 @@ struct DynamicModules: Decodable, Sendable {
         let like: Like?
     }
 
+    /// 空间动态里置顶的那条带 module_tag（text 为「置顶」）
+    struct Tag: Decodable, Sendable {
+        let text: String?
+    }
+
     let author: Author?
     let dynamic: DynamicContent?
     let stat: Stat?
+    let tag: Tag?
 
     private enum CodingKeys: String, CodingKey {
         case author = "module_author"
         case dynamic = "module_dynamic"
         case stat = "module_stat"
+        case tag = "module_tag"
+    }
+
+    /// 置顶标识的文字（没有时为 nil）
+    var pinLabel: String? {
+        guard let text = tag?.text, !text.isEmpty else { return nil }
+        return text
     }
 }
 

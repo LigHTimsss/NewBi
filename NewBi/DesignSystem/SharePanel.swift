@@ -1,16 +1,20 @@
 import SwiftUI
 import UIKit
 
-/// 要分享的东西：标题 + 链接
+/// 要分享的东西：标题 + 链接，或一张图片
 struct SharePayload: Identifiable, Equatable {
     let id = UUID()
     let title: String
-    let url: URL
+    let url: URL?
+    let image: UIImage?
 
     /// 发到微信 / QQ 时粘贴的文字：【标题】链接
     var message: String {
-        title.isEmpty ? url.absoluteString : "【\(title)】 \(url.absoluteString)"
+        guard let url else { return title }
+        return title.isEmpty ? url.absoluteString : "【\(title)】 \(url.absoluteString)"
     }
+
+    static func == (lhs: SharePayload, rhs: SharePayload) -> Bool { lhs.id == rhs.id }
 }
 
 /// 全局分享入口：任何地方调用 share，分享框画在整个 App 最上层（视频页之上）
@@ -22,7 +26,12 @@ final class ShareCenter {
     fileprivate(set) var payload: SharePayload?
 
     func share(title: String, url: URL) {
-        withAnimation(Motion.component) { payload = SharePayload(title: title, url: url) }
+        withAnimation(Motion.component) { payload = SharePayload(title: title, url: url, image: nil) }
+    }
+
+    /// 分享图片（大图查看里的「分享」）
+    func shareImage(_ image: UIImage) {
+        withAnimation(Motion.component) { payload = SharePayload(title: "图片", url: nil, image: image) }
     }
 
     func video(bvid: String, title: String) {
@@ -72,7 +81,7 @@ private struct SharePanel: View {
         VStack(spacing: 20) {
             VStack(spacing: 5) {
                 Text("分享到").font(.serif(17)).tracking(1.4)
-                Text(payload.title.isEmpty ? payload.url.absoluteString : payload.title)
+                Text(payload.title.isEmpty ? (payload.url?.absoluteString ?? "") : payload.title)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.secondaryText)
                     .lineLimit(1)
@@ -81,7 +90,7 @@ private struct SharePanel: View {
             HStack(spacing: 0) {
                 target("微信", icon: "message.fill", fill: Self.weChatGreen) { openApp("微信", scheme: "weixin://") }
                 target("QQ", icon: "bubble.left.fill", fill: Self.qqBlue) { openApp("QQ", scheme: "mqq://") }
-                target("复制链接", icon: "link", fill: nil, action: copyLink)
+                target(payload.image == nil ? "复制链接" : "复制图片", icon: payload.image == nil ? "link" : "doc.on.doc", fill: nil, action: copyLink)
                 target("系统分享", icon: "square.and.arrow.up", fill: nil, action: systemShare)
             }
             Button { ShareCenter.shared.dismiss() } label: {
@@ -122,34 +131,44 @@ private struct SharePanel: View {
         .buttonStyle(PressableStyle())
     }
 
-    /// 没有接入微信 / QQ 的官方 SDK（需要在开放平台注册应用）：先把「标题 + 链接」放进剪贴板，再打开对应 App 粘贴发送
+    /// 没有接入微信 / QQ 的官方 SDK（需要在开放平台注册应用）：先把「标题 + 链接」或图片放进剪贴板，
+    /// 再打开对应 App，在里面选好聊天对象后粘贴发送
     private func openApp(_ name: String, scheme: String) {
-        let message = payload.message
+        let payload = payload
         ShareCenter.shared.dismiss {
-            UIPasteboard.general.string = message
+            Self.copy(payload)
+            let what = payload.image == nil ? "链接" : "图片"
             guard let url = URL(string: scheme) else { return }
             Task {
                 if await UIApplication.shared.open(url) {
-                    ToastCenter.shared.show("链接已复制，到\(name)里粘贴发送")
+                    ToastCenter.shared.show("\(what)已复制，在\(name)里选好聊天后粘贴发送")
                 } else {
-                    ToastCenter.shared.show("没有安装\(name)，链接已复制")
+                    ToastCenter.shared.show("没有安装\(name)，\(what)已复制")
                 }
             }
         }
     }
 
     private func copyLink() {
-        let link = payload.url.absoluteString
+        let payload = payload
         ShareCenter.shared.dismiss {
-            UIPasteboard.general.string = link
-            ToastCenter.shared.show("链接已复制")
+            Self.copy(payload)
+            ToastCenter.shared.show(payload.image == nil ? "链接已复制" : "图片已复制")
+        }
+    }
+
+    private static func copy(_ payload: SharePayload) {
+        if let image = payload.image {
+            UIPasteboard.general.image = image
+        } else if payload.url != nil {
+            UIPasteboard.general.string = payload.message
         }
     }
 
     private func systemShare() {
         let payload = payload
         ShareCenter.shared.dismiss {
-            SystemShare.present(title: payload.title, url: payload.url)
+            SystemShare.present(payload)
         }
     }
 }
@@ -157,13 +176,21 @@ private struct SharePanel: View {
 /// 系统分享面板：从最上层的控制器弹出（视频页、全屏时也能弹）
 @MainActor
 enum SystemShare {
-    static func present(title: String, url: URL) {
+    /// 图片直接交给系统分享：微信、QQ 的分享扩展里可以直接选好友
+    static func present(_ payload: SharePayload) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
               let root = scene.keyWindow?.rootViewController else { return }
         var top = root
         while let presented = top.presentedViewController { top = presented }
-        let items: [Any] = title.isEmpty ? [url] : [title, url]
+        let items: [Any]
+        if let image = payload.image {
+            items = [image]
+        } else if let url = payload.url {
+            items = payload.title.isEmpty ? [url] : [payload.title, url]
+        } else {
+            return
+        }
         let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
         controller.popoverPresentationController?.sourceView = top.view
         top.present(controller, animated: true)

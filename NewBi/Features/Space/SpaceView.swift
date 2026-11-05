@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @MainActor
 @Observable
@@ -22,6 +23,10 @@ final class SpaceModel {
     let mid: Int
     let relation: RelationModel
     private(set) var profile: SpaceCard?
+    /// UID、勋章、IP 属地（拿不到时不显示，不影响页面）
+    private(set) var accInfo: SpaceAccInfo?
+    /// 投稿里搜索的关键词（空为不搜）
+    private(set) var keyword = ""
     private(set) var topVideo: VideoCard?
     private(set) var masterpieces: [VideoCard] = []
     /// 主页「最近投稿」：首次按最新发布加载的前 6 个
@@ -81,6 +86,7 @@ final class SpaceModel {
         loadVideos(reset: true)
         async let top = try? BiliClient.shared.get(.spaceTop(mid: mid), as: VideoCard.self)
         async let master = try? BiliClient.shared.get(.masterpiece(mid: mid), as: [VideoCard].self)
+        async let acc = try? BiliClient.shared.get(.spaceAccInfo(mid: mid), as: SpaceAccInfo.self)
         do {
             let card = try await BiliClient.shared.get(.spaceCard(mid: mid), as: SpaceCard.self)
             profile = card
@@ -91,6 +97,15 @@ final class SpaceModel {
         }
         topVideo = await top
         masterpieces = (await master ?? []).filter { !$0.bvid.isEmpty && $0.bvid != topVideo?.bvid }
+        accInfo = await acc
+    }
+
+    /// 搜这个 UP 主的投稿；空字符串回到全部
+    func search(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != keyword else { return }
+        keyword = trimmed
+        loadVideos(reset: true)
     }
 
     func retry() async {
@@ -114,15 +129,15 @@ final class SpaceModel {
         }
         guard !isLoadingVideos, hasMoreVideos else { return }
         isLoadingVideos = true
-        let page = page, order = order
+        let page = page, order = order, keyword = keyword
         loadTask = Task {
             do {
-                let result = try await BiliClient.shared.get(.spaceVideos(mid: mid, page: page, order: order.rawValue), as: SpaceArcSearch.self)
+                let result = try await BiliClient.shared.get(.spaceVideos(mid: mid, page: page, order: order.rawValue, keyword: keyword), as: SpaceArcSearch.self)
                 guard !Task.isCancelled else { return }
                 let known = Set(videos.map(\.id))
                 videos += (result.list.vlist ?? []).filter { !known.contains($0.id) }
                 videoCount = result.page.count
-                if order == .pubdate, recent.isEmpty { recent = Array(videos.prefix(6)) }
+                if order == .pubdate, keyword.isEmpty, recent.isEmpty { recent = Array(videos.prefix(6)) }
                 self.page = page + 1
                 videosError = nil
             } catch {
@@ -138,15 +153,22 @@ final class SpaceModel {
 struct SpaceView: View {
     @State private var model: SpaceModel
     @State private var tab: SpaceModel.Tab = .home
+    /// 上一次左右滑的方向：决定内容从哪一侧推进来
+    @State private var swipeForward = true
     @State private var signExpanded = false
     @State private var collapsed = false
     @State private var tabBarMinY: CGFloat = .infinity
     @State private var topInset: CGFloat = 0
     @State private var toast: String?
+    /// 搜 TA 的投稿
+    @State private var searching = false
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(SessionStore.self) private var session
 
-    /// - Parameter initialTab: 一进来就停在哪个 Tab（我的页点「动态」时直接看动态）
-    init(mid: Int, initialTab: SpaceModel.Tab = .home) {
+    /// - Parameter initialTab: 一进来就停在哪个 Tab：默认「投稿」（和官方客户端一样）；我的页点「动态」时直接看动态
+    init(mid: Int, initialTab: SpaceModel.Tab = .videos) {
         _model = State(initialValue: SpaceModel(mid: mid))
         _tab = State(initialValue: initialTab)
     }
@@ -165,7 +187,15 @@ struct SpaceView: View {
                         .opacity(tabPinned ? 0 : 1)
                         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { tabBarMinY = $0 }
                         .padding(.vertical, 12)
+                    if tab == .videos, searching || !model.keyword.isEmpty {
+                        searchBar.transition(.opacity)
+                    }
                     tabContent
+                        .id(tab)
+                        // 左右滑切到相邻的 Tab：往左滑是下一个，往右滑是上一个，内容跟着从对应一侧推进来
+                        .transition(.push(from: swipeForward ? .trailing : .leading))
+                        .contentShape(.rect)
+                        .simultaneousGesture(tabSwipe)
                 }
                 .padding(.bottom, 40)
             }
@@ -209,6 +239,14 @@ struct SpaceView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
                 Spacer(minLength: 0)
+                // 搜 TA 的投稿：切到「投稿」、弹出搜索框
+                GlassCircleButton(systemImage: "magnifyingglass", label: "搜索 TA 的视频") {
+                    withAnimation(Motion.component) {
+                        tab = .videos
+                        searching = true
+                    }
+                    searchFocused = true
+                }
                 Button {
                     if let url = URL(string: "https://space.bilibili.com/\(model.mid)") {
                         let name = model.profile?.card.name ?? ""
@@ -249,7 +287,21 @@ struct SpaceView: View {
                             stat(card.attention, "关注")
                             stat(profile.likeNum ?? 0, "获赞")
                         }
-                        FollowButton(relation: model.relation) { toast = $0 }
+                        HStack(spacing: 8) {
+                            FollowButton(relation: model.relation) { toast = $0 }
+                            // 登录后、不是自己时可以私信
+                            if session.isLoggedIn, session.mid != model.mid {
+                                NavigationLink(value: Route.chat(ChatPeer(id: model.mid, name: card.name, face: card.face))) {
+                                    Text("私信")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(.primary)
+                                        .frame(width: 64, height: 32)
+                                        .background(Theme.selection, in: .capsule)
+                                        .contentShape(.capsule)
+                                }
+                                .buttonStyle(PressableStyle())
+                            }
+                        }
                     }
                     .padding(.bottom, 4)
                 }
@@ -261,7 +313,32 @@ struct SpaceView: View {
                     if card.vip?.vipStatus == 1, let label = card.vip?.label?.text, !label.isEmpty {
                         VipBadge(text: label)
                     }
+                    // 佩戴的粉丝勋章、成就勋章
+                    if let medal = model.accInfo?.wornMedal { FansMedalChip(medal: medal) }
+                    if let plate = model.accInfo?.nameplate, let url = plate.imageSmall ?? plate.image, !url.isEmpty {
+                        RemoteImage(url: url, size: CGSize(width: 22, height: 22), fill: false, background: .clear)
+                            .frame(width: 22, height: 22)
+                            .accessibilityLabel(plate.name ?? "勋章")
+                    }
                 }
+
+                // UID（点按复制）· IP 属地
+                HStack(spacing: 12) {
+                    Button {
+                        UIPasteboard.general.string = "\(model.mid)"
+                        toast = "UID 已复制"
+                    } label: {
+                        Text("UID:\(String(model.mid))")
+                    }
+                    .buttonStyle(.plain)
+                    if let location = model.accInfo?.location {
+                        Text("IP属地：\(location)")
+                    }
+                }
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .foregroundStyle(Theme.secondaryText)
+                .padding(.top, -6)
 
                 if let official = card.officialVerify, official.type >= 0, !official.desc.isEmpty {
                     Label(official.desc, systemImage: "checkmark.seal.fill")
@@ -308,10 +385,53 @@ struct SpaceView: View {
         .frame(maxWidth: .infinity)
     }
 
+    // MARK: 搜索投稿
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(Theme.secondaryText)
+                TextField("搜索 TA 的视频", text: $query)
+                    .submitLabel(.search)
+                    .focused($searchFocused)
+                    .onSubmit { model.search(query) }
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                        model.search("")
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.secondaryText)
+                    }
+                    .accessibilityLabel("清除")
+                }
+            }
+            .font(.system(size: 15))
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(Theme.selection, in: .capsule)
+            Button("取消") {
+                query = ""
+                searchFocused = false
+                model.search("")
+                withAnimation(Motion.component) { searching = false }
+            }
+            .font(.system(size: 15))
+            .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+    }
+
     // MARK: Tab
 
     private var tabBar: some View {
-        GlassSegmented(options: SpaceModel.Tab.allCases, selection: $tab) { item in
+        // 点 Tab 也按左右位置决定内容从哪一侧推进来
+        let selection = Binding<SpaceModel.Tab>(get: { tab }, set: { new in
+            let tabs = SpaceModel.Tab.allCases
+            swipeForward = (tabs.firstIndex(of: new) ?? 0) > (tabs.firstIndex(of: tab) ?? 0)
+            tab = new
+        })
+        return GlassSegmented(options: SpaceModel.Tab.allCases, selection: selection) { item in
             if item == .videos, let count = model.videoCount ?? model.profile?.archiveCount {
                 return "投稿 \(count.biliCount)"
             }
@@ -323,6 +443,22 @@ struct SpaceView: View {
     }
 
     @ViewBuilder
+    /// 明显的横向滑动才切换（竖向照常滚动页面）；从左边缘开始的留给侧滑返回
+    private var tabSwipe: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                let dx = value.translation.width, dy = value.translation.height
+                guard abs(dx) > 70, abs(dx) > abs(dy) * 1.6, value.startLocation.x > 30 else { return }
+                let tabs = SpaceModel.Tab.allCases
+                guard let current = tabs.firstIndex(of: tab) else { return }
+                let next = dx < 0 ? current + 1 : current - 1
+                guard tabs.indices.contains(next) else { return }
+                swipeForward = dx < 0
+                searchFocused = false
+                withAnimation(Motion.tab) { tab = tabs[next] }
+            }
+    }
+
     private var tabContent: some View {
         switch tab {
         case .home: SpaceHome(model: model, showAll: { withAnimation(Motion.tab) { tab = .videos } })
@@ -565,5 +701,40 @@ private struct SpaceVideos: View {
             }
         }
         .padding(.horizontal, 16)
+    }
+}
+
+/// 佩戴中的粉丝勋章：渐变底的勋章名 + 等级
+private struct FansMedalChip: View {
+    let medal: SpaceAccInfo.FansMedal.Medal
+
+    private static func color(_ value: Int?, fallback: Int) -> Color {
+        let rgb = value ?? fallback
+        return Color(red: Double((rgb >> 16) & 0xFF) / 255, green: Double((rgb >> 8) & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255)
+    }
+
+    var body: some View {
+        let start = Self.color(medal.medalColorStart, fallback: 0x5762A8)
+        let end = Self.color(medal.medalColorEnd ?? medal.medalColorStart, fallback: 0x5762A8)
+        HStack(spacing: 0) {
+            Text(medal.medalName ?? "")
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .frame(maxHeight: .infinity)
+                .background(LinearGradient(colors: [start, end], startPoint: .leading, endPoint: .trailing))
+            if let level = medal.level {
+                Text("\(level)")
+                    .foregroundStyle(start)
+                    .padding(.horizontal, 4)
+                    .frame(maxHeight: .infinity)
+                    .background(.white)
+            }
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .lineLimit(1)
+        .frame(height: 16)
+        .clipShape(.rect(cornerRadius: 4))
+        .overlay { RoundedRectangle(cornerRadius: 4).stroke(start, lineWidth: 0.5) }
+        .accessibilityLabel("粉丝勋章 \(medal.medalName ?? "") \(medal.level ?? 0) 级")
     }
 }

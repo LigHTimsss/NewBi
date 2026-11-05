@@ -264,8 +264,17 @@ extension Endpoint {
 
     /// 投稿列表
     /// - Parameter order: pubdate 最新发布 · click 最多播放 · stow 最多收藏
-    static func spaceVideos(mid: Int, page: Int, order: String) -> Endpoint {
+    /// UID、勋章、IP 属地（WBI 签名）
+    static func spaceAccInfo(mid: Int) -> Endpoint {
+        var query = ["mid": "\(mid)", "platform": "web", "web_location": "1550101"]
+        query.merge(riskParams) { $1 }
+        return Endpoint(path: "/x/space/wbi/acc/info", query: query, signed: true)
+    }
+
+    /// - Parameter keyword: 非空时只搜这个 UP 主的投稿
+    static func spaceVideos(mid: Int, page: Int, order: String, keyword: String = "") -> Endpoint {
         var query = ["mid": "\(mid)", "ps": "30", "pn": "\(page)", "order": order, "platform": "web", "web_location": "1550101"]
+        if !keyword.isEmpty { query["keyword"] = keyword }
         query.merge(riskParams) { $1 }
         return Endpoint(path: "/x/space/wbi/arc/search", query: query, signed: true)
     }

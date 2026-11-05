@@ -2,6 +2,8 @@ import SwiftUI
 
 enum Route: Hashable {
     case settings
+    /// 设置 → 清理存储空间
+    case storage
     case search
     /// UP 主空间
     case space(mid: Int)
@@ -74,6 +76,7 @@ struct RootView: View {
                 Group {
                     switch route {
                     case .settings: SettingsView()
+                    case .storage: StorageView()
                     case .search:
                         // 从搜索按钮放大展开，返回时缩回按钮
                         SearchView().navigationTransition(.zoom(sourceID: "search", in: searchTransition))

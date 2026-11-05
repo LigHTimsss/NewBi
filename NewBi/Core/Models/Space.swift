@@ -125,6 +125,65 @@ struct SpaceVideo: Decodable, Identifiable, Sendable {
     }
 }
 
+/// /x/space/wbi/acc/info：名片接口没有的 UID 展示信息、勋章、IP 属地。字段都可能缺，全按可选解
+struct SpaceAccInfo: Decodable, Sendable {
+    /// 成就勋章（勋章墙里展示的那一枚）
+    struct Nameplate: Decodable, Sendable {
+        let name: String?
+        let image: String?
+        let imageSmall: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case name, image
+            case imageSmall = "image_small"
+        }
+    }
+
+    /// 佩戴中的粉丝勋章
+    struct FansMedal: Decodable, Sendable {
+        struct Medal: Decodable, Sendable {
+            let medalName: String?
+            let level: Int?
+            let medalColorStart: Int?
+            let medalColorEnd: Int?
+
+            private enum CodingKeys: String, CodingKey {
+                case level
+                case medalName = "medal_name"
+                case medalColorStart = "medal_color_start"
+                case medalColorEnd = "medal_color_end"
+            }
+        }
+
+        let show: Bool?
+        let wear: Bool?
+        let medal: Medal?
+    }
+
+    let mid: Int?
+    let nameplate: Nameplate?
+    let fansMedal: FansMedal?
+    /// 「IP属地：广东」；接口不一定给
+    let ipLocation: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case mid, nameplate
+        case fansMedal = "fans_medal"
+        case ipLocation = "ip_location"
+    }
+
+    var wornMedal: FansMedal.Medal? {
+        guard fansMedal?.wear == true, let medal = fansMedal?.medal, let name = medal.medalName, !name.isEmpty else { return nil }
+        return medal
+    }
+
+    var location: String? {
+        guard let raw = ipLocation?.replacingOccurrences(of: "IP属地：", with: "").trimmingCharacters(in: .whitespaces),
+              !raw.isEmpty else { return nil }
+        return raw
+    }
+}
+
 struct RelationInfo: Decodable, Sendable {
     let attribute: Int
 }
