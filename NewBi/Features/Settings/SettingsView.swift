@@ -23,10 +23,10 @@ struct SettingsView: View {
     /// 自动：系统播放器失败时切 FFmpeg；FFmpeg 不支持系统画中画
     @AppStorage("enginePreference") private var enginePreference = "auto"
     // 临时：定位低电量模式切到「我的」卡顿，每次只开一个
-    @AppStorage(Diagnostics.mineNoGlass) private var diagMineNoGlass = false
-    @AppStorage(Diagnostics.mineBlank) private var diagMineBlank = false
-    @AppStorage(Diagnostics.tabBarNoGlass) private var diagTabBarNoGlass = false
-    @AppStorage(Diagnostics.hideDynamic) private var diagHideDynamic = false
+    @AppStorage(Diagnostics.mineNoHeader) private var diagNoHeader = false
+    @AppStorage(Diagnostics.mineNoCards) private var diagNoCards = false
+    @AppStorage(Diagnostics.mineNoScroll) private var diagNoScroll = false
+    @AppStorage(Diagnostics.mineNoToolbar) private var diagNoToolbar = false
 
     var body: some View {
         ScrollView {
@@ -112,13 +112,13 @@ struct SettingsView: View {
                         .foregroundStyle(Theme.secondaryText)
                         .padding(.leading, 16)
                     group {
-                        Toggle("「我的」工具条不用玻璃", isOn: $diagMineNoGlass).frame(minHeight: 50)
+                        Toggle("「我的」不显示头像那一块", isOn: $diagNoHeader).frame(minHeight: 50)
                         divider
-                        Toggle("「我的」换成空白页", isOn: $diagMineBlank).frame(minHeight: 50)
+                        Toggle("「我的」不显示数据和入口卡片", isOn: $diagNoCards).frame(minHeight: 50)
                         divider
-                        Toggle("底栏不用玻璃", isOn: $diagTabBarNoGlass).frame(minHeight: 50)
+                        Toggle("「我的」不用滚动视图", isOn: $diagNoScroll).frame(minHeight: 50)
                         divider
-                        Toggle("切页时不画动态页", isOn: $diagHideDynamic).frame(minHeight: 50)
+                        Toggle("「我的」不显示右上角工具条", isOn: $diagNoToolbar).frame(minHeight: 50)
                     }
                     .tint(accent)
                 }

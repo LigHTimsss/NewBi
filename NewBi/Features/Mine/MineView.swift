@@ -7,20 +7,37 @@ struct MineView: View {
     @Environment(\.colorScheme) private var scheme
     @AppStorage("appearance") private var appearance = 0
     @State private var showLogin = false
+    // 临时性能诊断开关（设置页底部）
+    @AppStorage(Diagnostics.mineNoHeader) private var diagNoHeader = false
+    @AppStorage(Diagnostics.mineNoCards) private var diagNoCards = false
+    @AppStorage(Diagnostics.mineNoScroll) private var diagNoScroll = false
+    @AppStorage(Diagnostics.mineNoToolbar) private var diagNoToolbar = false
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                header
+        let content = VStack(spacing: 20) {
+            if !diagNoHeader { header }
+            if !diagNoCards {
                 if session.isLoggedIn { stats }
                 shortcuts
                 moreRows
             }
-            .padding(.horizontal, 16)
         }
-        .contentMargins(.top, 56, for: .scrollContent)
-        .contentMargins(.bottom, 96, for: .scrollContent)
-        .overlay(alignment: .topTrailing) { toolGroup.padding(.trailing, 16) }
+        .padding(.horizontal, 16)
+
+        Group {
+            if diagNoScroll {
+                content
+                    .padding(.top, 56)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            } else {
+                ScrollView { content }
+                    .contentMargins(.top, 56, for: .scrollContent)
+                    .contentMargins(.bottom, 96, for: .scrollContent)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if !diagNoToolbar { toolGroup.padding(.trailing, 16) }
+        }
         .sheet(isPresented: $showLogin) { LoginView() }
     }
 
@@ -38,7 +55,7 @@ struct MineView: View {
         .font(.system(size: 18))
         .foregroundStyle(.primary)
         .padding(.horizontal, 2)
-        .diagnosticGlass(Diagnostics.mineNoGlass, in: .capsule)
+        .glassEffect(.regular.interactive(), in: .capsule)
     }
 
     private func toolButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {

@@ -30,9 +30,6 @@ struct RootView: View {
     /// 正在滑出的页（可能连点了好几次），这一串切换的动画全部结束后清空
     @State private var leaving: Set<AppTab> = []
     @State private var switchID = 0
-    // 临时性能诊断开关（设置页底部）
-    @AppStorage(Diagnostics.mineBlank) private var diagMineBlank = false
-    @AppStorage(Diagnostics.hideDynamic) private var diagHideDynamic = false
     @Environment(SessionStore.self) private var session
     @Namespace private var searchTransition
     @Environment(\.scenePhase) private var scenePhase
@@ -49,8 +46,6 @@ struct RootView: View {
                             .coverSpace()
                             .miniPlayerInset(66)
                             .frame(width: geo.size.width)
-                            // 诊断：动态页不是当前页时不画（临时）
-                            .opacity(diagHideDynamic && item == .dynamic && tab != .dynamic ? 0 : 1)
                             .offset(x: CGFloat(item.rawValue - tab.rawValue) * geo.size.width)
                             .allowsHitTesting(item == tab)
                             .accessibilityHidden(item != tab)
@@ -157,9 +152,7 @@ struct RootView: View {
         switch item {
         case .home: HomeView(onAvatar: { select(.mine) }, onMessages: { path.append(Route.messages) })
         case .dynamic: DynamicView(refreshToken: dynamicRefresh)
-        case .mine:
-            // 诊断：「我的」换成空白页（临时）
-            if diagMineBlank { DiagnosticBlankPage() } else { MineView() }
+        case .mine: MineView()
         }
     }
 

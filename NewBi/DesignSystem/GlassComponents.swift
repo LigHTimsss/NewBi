@@ -216,7 +216,7 @@ struct GlassTabBar: View {
                     .accessibilityValue(badges.contains(tab) ? "有更新" : "")
                 }
                 .padding(5)
-                .diagnosticGlass(Diagnostics.tabBarNoGlass, in: .capsule)
+                .glassEffect(.regular.interactive(), in: .capsule)
 
                 Button(action: onSearch) {
                     Image(systemName: "magnifyingglass")
@@ -225,7 +225,7 @@ struct GlassTabBar: View {
                         .contentShape(.circle)
                 }
                 .buttonStyle(PressableStyle())
-                .diagnosticGlass(Diagnostics.tabBarNoGlass, in: .circle)
+                .glassEffect(.regular.interactive(), in: .circle)
                 .matchedTransitionSource(id: "search", in: searchTransition)
                 .accessibilityLabel("搜索")
             }
