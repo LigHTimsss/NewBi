@@ -29,6 +29,10 @@ final class DownloadManager {
     @ObservationIgnored private var refreshes: [String: Int] = [:]
     /// 每条记录的封面 / 弹幕任务；token 防止旧任务结束时清掉新任务的登记
     @ObservationIgnored private var extras: [String: (token: UUID, task: Task<Void, Never>)] = [:]
+    /// 开始下载后一直没有数据时的说明（「服务器返回 HTTP 403」之类），显示在缓存中的那一行
+    private(set) var notes: [String: String] = [:]
+    /// 开始后 15 秒还没收到数据：去查一下任务的真实状态
+    @ObservationIgnored private var probes: [String: Task<Void, Never>] = [:]
     private let maxConcurrent = 2
     private static let maxRefreshes = 3
 
@@ -36,6 +40,15 @@ final class DownloadManager {
     var inProgress: [DownloadRecord] { records.filter { $0.state != .completed } }
 
     private static var wifiOnly: Bool { UserDefaults.standard.object(forKey: "downloadWifiOnly") as? Bool ?? true }
+
+    /// 下载中但还没收到数据时，告诉用户在等什么（否则只看到一直是 0%）
+    func waitingReason(for record: DownloadRecord) -> String? {
+        guard record.state == .downloading, record.receivedBytes == 0 else { return nil }
+        let network = NetworkStatus.shared
+        if !network.isOnline { return "等待网络连接" }
+        if Self.wifiOnly, network.isCellular { return "等待 Wi-Fi（设置里可关闭「仅在 Wi-Fi 下缓存」）" }
+        return notes[record.id] ?? "正在连接…"
+    }
 
     private init() {
         let config = URLSessionConfiguration.background(withIdentifier: "com.example.newbi.downloads")
@@ -98,6 +111,7 @@ final class DownloadManager {
         records[index].state = .paused
         cancelTasks(id)
         cancelExtras(id)
+        clearNote(id)
         save()
         schedule()
     }
@@ -118,6 +132,7 @@ final class DownloadManager {
             records[index].state = .paused
             cancelTasks(records[index].id)
             cancelExtras(records[index].id)
+            clearNote(records[index].id)
         }
         save()
         schedule()
@@ -132,6 +147,7 @@ final class DownloadManager {
             refreshes[key] = nil
         }
         cancelExtras(id)
+        clearNote(id)
         try? FileManager.default.removeItem(at: DownloadPaths.folder(id))
         records.removeAll { $0.id == id }
         save()
@@ -189,6 +205,8 @@ final class DownloadManager {
             } else if let url = stream.urls.first {
                 var request = URLRequest(url: url)
                 request.allowsCellularAccess = !Self.wifiOnly
+                // CDN 校验 Referer / UA：每个请求上都写一遍，不只靠后台会话的默认请求头
+                for (name, value) in BiliClient.mediaHeaders { request.setValue(value, forHTTPHeaderField: name) }
                 task = session.downloadTask(with: request)
             } else {
                 continue
@@ -198,6 +216,7 @@ final class DownloadManager {
             task.resume()
             alive = true
         }
+        if alive { scheduleProbe(record.id) }
         if !alive {
             // 两路其实都已经装好（上次只差最后一步）：直接收尾
             if record.isFinished {
@@ -219,8 +238,58 @@ final class DownloadManager {
         records[index].error = message
         cancelTasks(id)
         cancelExtras(id)
+        clearNote(id)
         save()
         schedule()
+    }
+
+    // MARK: 一直没有数据时的检查
+
+    private func scheduleProbe(_ id: String) {
+        probes[id]?.cancel()
+        probes[id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            await self?.probe(id)
+        }
+    }
+
+    private func clearNote(_ id: String) {
+        probes.removeValue(forKey: id)?.cancel()
+        notes[id] = nil
+    }
+
+    /// 开始 15 秒后还是 0：看任务到底处在什么状态，能恢复的恢复，不能的把原因写到那一行上
+    private func probe(_ id: String) async {
+        probes[id] = nil
+        guard let record = records.first(where: { $0.id == id }), record.state == .downloading, record.receivedBytes == 0 else { return }
+        let keys = Set(DownloadRecord.Part.allCases.map { DownloadPaths.taskKey(id, $0) })
+        let all = await session.allTasks
+        let mine = all.filter { task in
+            guard let key = task.taskDescription else { return false }
+            return keys.contains(key)
+        }
+        guard let index = records.firstIndex(where: { $0.id == id }), records[index].state == .downloading,
+              records[index].receivedBytes == 0 else { return }
+        if mine.isEmpty {
+            // 系统那边已经没有任务了（被系统清掉）：清掉登记，重新开始
+            for key in keys { tasks[key] = nil }
+            notes[id] = "下载任务丢失，已重新开始"
+            start(at: index)
+            return
+        }
+        for task in mine where task.state == .suspended { task.resume() }
+        let statuses = mine.compactMap { ($0.response as? HTTPURLResponse)?.statusCode }
+        if let bad = statuses.first(where: { !(200..<300).contains($0) }) {
+            notes[id] = "服务器拒绝了请求（HTTP \(bad)）"
+        } else if mine.contains(where: { $0.countOfBytesReceived > 0 }) {
+            notes[id] = nil
+        } else if let error = mine.compactMap(\.error).first {
+            notes[id] = "连接出错：\(error.localizedDescription)"
+        } else {
+            notes[id] = "服务器一直没有响应，还在等待（可以暂停后重试）"
+        }
+        scheduleProbe(id)
     }
 
     private func reattach(_ running: [URLSessionTask]) {
@@ -266,6 +335,8 @@ final class DownloadManager {
             records[index].audioBytes = written
             if expected > 0 { records[index].audioTotal = expected }
         }
+        // 数据开始进来了：不再需要「在等什么」的说明
+        if written > 0, notes[id] != nil || probes[id] != nil { clearNote(id) }
     }
 
     fileprivate func finished(_ event: TaskCompletion) {
@@ -342,6 +413,7 @@ final class DownloadManager {
         }
         records[index].state = .completed
         records[index].error = nil
+        clearNote(records[index].id)
         // 开始时没取成的封面 / 弹幕（比如当时在蜂窝网络）现在补上
         fetchExtras(records[index])
     }
@@ -358,6 +430,7 @@ final class DownloadManager {
             return
         }
         refreshes[key] = attempt
+        notes[id] = "下载地址被拒绝，正在换新地址（第 \(attempt) 次）"
         try? await Task.sleep(for: .seconds(attempt * attempt))
         guard let record = records.first(where: { $0.id == id }) else { return }
         do {

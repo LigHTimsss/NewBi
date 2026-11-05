@@ -15,7 +15,7 @@ struct LoginView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
-    @State private var mode: Mode = .qr
+    @State private var mode: Mode = .sms
     @State private var qr = QRLoginModel()
     @State private var account = AccountLoginModel()
     @State private var finishing = false

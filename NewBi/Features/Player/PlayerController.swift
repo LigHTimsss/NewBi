@@ -128,6 +128,8 @@ final class PlayerController {
     @ObservationIgnored private var hls: DashHLSSession?
     /// 已离线缓存时优先播本地文件（不联网、不受地址过期影响）
     @ObservationIgnored private var localRecord: DownloadRecord?
+    /// 离线缓存第一次播放失败的具体原因（哪个播放器、什么错误）：最后显示给用户，方便定位
+    @ObservationIgnored private var offlineFailure: String?
     /// 当前 DASH 流的编码（7 / 12 / 13），MP4 时为 nil
     @ObservationIgnored private var currentCodec: Int?
     /// 系统引擎播放失败过的编码，后续选流时跳过
@@ -239,6 +241,7 @@ final class PlayerController {
         error = nil
         hasFrame = false // 新的一 P 出第一帧前盖着封面
         localRecord = DownloadManager.shared.completed(bvid: bvid, cid: cid)
+        offlineFailure = nil
         danmaku.localFolder = localRecord.map { DownloadPaths.folder($0.id) }
 
         let alert = UserDefaults.standard.bool(forKey: "cellularAlert")
@@ -413,8 +416,20 @@ final class PlayerController {
     }
 
     /// 播放区显示的错误：区分登录失效、无权观看、网络和媒体本身的问题
+    /// 离线缓存放不了：带上第一次失败的具体原因
+    private static func offlineMessage(_ reason: String?) -> String {
+        reason.map { "离线缓存无法播放：\($0)" } ?? "离线缓存无法播放，可删除后重新缓存"
+    }
+
+    /// 播放器报的错误：说明是哪个播放器、错误域和错误码（系统错误文案常常只有「无法完成操作」）
+    private static func reason(_ error: Error?, engine: EngineKind) -> String {
+        guard let error else { return "\(engine.rawValue) 播放失败" }
+        let ns = error as NSError
+        return "\(engine.rawValue)：\(ns.localizedDescription)（\(ns.domain) \(ns.code)）"
+    }
+
     private static func describe(_ error: Error, offline: Bool) -> String {
-        if offline { return "离线缓存无法播放，可删除后重新缓存" }
+        if offline { return "离线缓存无法播放：\(error.localizedDescription)" }
         switch error {
         case BiliError.api(let code, let message):
             switch code {
@@ -462,7 +477,10 @@ final class PlayerController {
             RemoteControl.shared.refresh(self)
         case .firstFrame:
             hasFrame = true
-        case .failed:
+        case .failed(let failure):
+            if localRecord != nil, offlineFailure == nil {
+                offlineFailure = Self.reason(failure, engine: engine.kind)
+            }
             recover()
         case .ended:
             switch endAction {
@@ -495,7 +513,7 @@ final class PlayerController {
             // 在线流可以换一种编码再试；离线缓存只有这一个文件，换编码没有意义，直接进入下一级
             failedCodecs.insert(codec)
         } else if !advanceStage() {
-            error = localRecord != nil ? "离线缓存无法播放，可删除后重新缓存" : "播放失败，请稍后重试"
+            error = localRecord != nil ? Self.offlineMessage(offlineFailure) : "播放失败，请稍后重试"
             return
         }
         generation += 1

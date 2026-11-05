@@ -806,6 +806,40 @@ private struct DetailTabs: View {
     }
 }
 
+/// 简介正文：默认 3 行，长的可以展开；网址、BV 号、时间点可点（时间点跳到该位置，交给视频页的 openURL）。
+/// B 站没有简介时返回「-」，这时不显示
+private struct IntroDescription: View {
+    let text: String
+    @State private var expanded = false
+    @Environment(\.accent) private var accent
+    @Environment(\.colorScheme) private var scheme
+
+    private var content: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// 粗略判断会不会超过 3 行：有换行或字数多时才给「展开」
+    private var collapsible: Bool { content.count > 60 || content.filter(\.isNewline).count >= 3 }
+
+    var body: some View {
+        if !content.isEmpty, content != "-" {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(RichText.linkify(content, links: RichText.Links(timestamps: true), color: accent.accentText(scheme)))
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineSpacing(3)
+                    .lineLimit(expanded ? nil : 3)
+                    .fixedSize(horizontal: false, vertical: true)
+                if collapsible {
+                    Button(expanded ? "收起" : "展开") {
+                        withAnimation(Motion.component) { expanded.toggle() }
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(accent.accentText(scheme))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 private struct IntroSection: View {
     let model: VideoDetailModel
     @State private var toast: String?
@@ -878,6 +912,8 @@ private struct IntroSection: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.secondaryText)
                     .padding(.top, -6)
+
+                    IntroDescription(text: detail.desc)
 
                     actions(detail.stat)
                     if model.pages.count > 1 {

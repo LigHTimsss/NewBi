@@ -189,7 +189,10 @@ private struct DownloadingRow: View {
     private var statusText: String {
         let progress = "\(DownloadsView.size(record.receivedBytes)) / \(DownloadsView.size(record.totalBytes))"
         switch record.state {
-        case .downloading: return "\(Int(record.progress * 100))% · \(progress)"
+        case .downloading:
+            // 还没收到数据：说清楚在等什么（Wi-Fi、网络、服务器），不是干看着 0%
+            if let reason = DownloadManager.shared.waitingReason(for: record) { return reason }
+            return "\(Int(record.progress * 100))% · \(progress)"
         case .waiting: return "等待中 · \(record.qualityName)"
         case .paused: return "已暂停 · \(progress)"
         case .failed: return record.error ?? "下载失败，点右侧重试"
@@ -232,6 +235,9 @@ struct CacheSheet: View {
     let qualities: [QualityOption]
     @State private var selected: Int
     @State private var isAdding = false
+    /// 开着「仅在 Wi-Fi 下缓存」又不在 Wi-Fi 下：先提醒，不然加进去只会一直停在 0
+    @State private var confirmWifi = false
+    @AppStorage("downloadWifiOnly") private var wifiOnly = true
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
@@ -281,11 +287,30 @@ struct CacheSheet: View {
                     Button("取消", role: .cancel) { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("缓存") { add() }.disabled(isAdding)
+                    Button("缓存") { requestAdd() }.disabled(isAdding)
                 }
             }
         }
         .presentationDetents([.medium])
+        .alert("当前没有连接 Wi-Fi", isPresented: $confirmWifi) {
+            Button("连上 Wi-Fi 后再下") { add() }
+            Button("关闭「仅 Wi-Fi」，现在就下") {
+                wifiOnly = false
+                add()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("已开启「仅在 Wi-Fi 下缓存」，现在加入的话要等连上 Wi-Fi 才会开始下载。也可以在「设置」里随时改。")
+        }
+    }
+
+    private func requestAdd() {
+        let network = NetworkStatus.shared
+        if wifiOnly, network.isCellular || !network.isOnline {
+            confirmWifi = true
+        } else {
+            add()
+        }
     }
 
     private func add() {
