@@ -751,14 +751,57 @@ private struct StageEdgePan: UIGestureRecognizerRepresentable {
 /// 卡片封面在屏幕上的位置：VideoLink 持有，封面（videoCover）随布局写入，舞台打开 / 收回时读取
 @MainActor
 final class VideoSource {
-    var rect: CGRect = .zero
+    /// 在屏幕上的位置：记的是相对所在根页面的位置，读的时候再加上页面此刻的屏幕位置
+    var rect: CGRect {
+        guard let space else { return local }
+        return local.offsetBy(dx: space.origin.x, dy: space.origin.y)
+    }
     var radius: CGFloat = 12
     var isVisible = false
     /// 卡片里标了封面：从封面展开（否则用整张卡片）
     var hasCover = false
+
+    private var local: CGRect = .zero
+    private weak var space: CoverSpace?
+
+    func place(_ frame: CGRect, in space: CoverSpace?) {
+        local = frame
+        self.space = space
+    }
+}
+
+/// 卡片位置的参照系：根 Tab 页各一个。
+/// 切 Tab 时整页平移，卡片相对页面不动，不必每帧给每张卡片重算屏幕位置；只有页面自己每帧更新一次原点
+@MainActor
+final class CoverSpace {
+    let name = UUID()
+    fileprivate(set) var origin: CGPoint = .zero
+}
+
+private struct CoverSpaceHost: ViewModifier {
+    @State private var space = CoverSpace()
+
+    func body(content: Content) -> some View {
+        content
+            .coordinateSpace(.named(space.name))
+            .environment(\.coverSpace, space)
+            .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: { origin in
+                space.origin = origin
+            }
+    }
+}
+
+extension View {
+    /// 标记一个会整体平移的页面（根 Tab 页）：里面的视频卡片按页面记位置
+    func coverSpace() -> some View {
+        modifier(CoverSpaceHost())
+    }
 }
 
 extension EnvironmentValues {
+    @Entry var coverSpace: CoverSpace? = nil
+    /// 所在的根 Tab 页当前是否在用（选中，或正在滑出）。不在用时停掉呼吸光轨这类循环动画
+    @Entry var pageActive = true
     /// 视频页里（舞台上）：点相关推荐原地换视频，不再从卡片展开
     @Entry var inStage = false
     @Entry var videoSource: VideoSource? = nil
@@ -777,6 +820,7 @@ struct VideoLink<Label: View>: View {
     @ViewBuilder var label: Label
     @State private var source = VideoSource()
     @Environment(\.inStage) private var inStage
+    @Environment(\.coverSpace) private var space
 
     var body: some View {
         let tracks = morphs && !inStage
@@ -788,8 +832,10 @@ struct VideoLink<Label: View>: View {
                 .environment(\.videoSource, tracks ? source : nil)
                 .opacity(tracks && !source.hasCover && VideoStage.shared.hiddenSource === source ? 0 : 1)
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
-            if tracks, !source.hasCover { source.rect = frame }
+        .onGeometryChange(for: CGRect.self) { [name = space?.name] proxy in
+            name.map { proxy.frame(in: .named($0)) } ?? proxy.frame(in: .global)
+        } action: { frame in
+            if tracks, !source.hasCover { source.place(frame, in: space) }
         }
         .onAppear { source.isVisible = true }
         .onDisappear { source.isVisible = false }
@@ -806,14 +852,17 @@ extension View {
 private struct VideoCover: ViewModifier {
     let radius: CGFloat
     @Environment(\.videoSource) private var source
+    @Environment(\.coverSpace) private var space
 
     func body(content: Content) -> some View {
         if let source {
             content
                 .opacity(VideoStage.shared.hiddenSource === source ? 0 : 1)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                .onGeometryChange(for: CGRect.self) { [name = space?.name] proxy in
+                    name.map { proxy.frame(in: .named($0)) } ?? proxy.frame(in: .global)
+                } action: { frame in
                     source.hasCover = true
-                    source.rect = frame
+                    source.place(frame, in: space)
                     source.radius = radius
                 }
         } else {

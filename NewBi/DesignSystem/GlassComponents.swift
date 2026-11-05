@@ -16,6 +16,7 @@ struct PressableStyle: ButtonStyle {
 struct GlowLine: View {
     var color: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.pageActive) private var pageActive
 
     var body: some View {
         Capsule()
@@ -23,8 +24,8 @@ struct GlowLine: View {
             .frame(width: 16, height: 2)
             .shadow(color: color, radius: 3)
             .shadow(color: color.opacity(0.6), radius: 7)
-            // 呼吸 2.8s；只作用于这一根 2pt 线，开销可忽略
-            .phaseAnimator(reduceMotion ? [1.0] : [1.0, 0.55]) { line, opacity in
+            // 呼吸 2.8s。循环动画会让主线程每帧都有活：所在的根 Tab 页不在用时停在常亮
+            .phaseAnimator(reduceMotion || !pageActive ? [1.0] : [1.0, 0.55]) { line, opacity in
                 line.opacity(opacity)
             } animation: { _ in .easeInOut(duration: 1.4) }
     }

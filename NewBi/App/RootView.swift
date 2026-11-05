@@ -27,6 +27,9 @@ struct RootView: View {
     @State private var path = NavigationPath()
     /// 递增即让动态页刷新：有红点时切过去、或在动态页再点一次「动态」
     @State private var dynamicRefresh = 0
+    /// 正在滑出的页（可能连点了好几次），这一串切换的动画全部结束后清空
+    @State private var leaving: Set<AppTab> = []
+    @State private var switchID = 0
     @Environment(SessionStore.self) private var session
     @Namespace private var searchTransition
     @Environment(\.scenePhase) private var scenePhase
@@ -37,6 +40,10 @@ struct RootView: View {
                 ZStack {
                     ForEach(AppTab.allCases) { item in
                         page(item)
+                            // 当前页和正在滑出的页照常；其余页停掉呼吸光轨（停的时候都在屏幕外，看不出来）
+                            .environment(\.pageActive, item == tab || leaving.contains(item))
+                            // 卡片位置按页面记：切页平移时不必每帧重算每张卡片
+                            .coverSpace()
                             .miniPlayerInset(66)
                             .frame(width: geo.size.width)
                             .offset(x: CGFloat(item.rawValue - tab.rawValue) * geo.size.width)
@@ -153,6 +160,15 @@ struct RootView: View {
         if item == .dynamic, tab == .dynamic || DynamicBadge.shared.hasNew {
             dynamicRefresh += 1
         }
-        withAnimation(Motion.tab) { tab = item }
+        guard item != tab else { return }
+        leaving.insert(tab)
+        switchID += 1
+        let id = switchID
+        withAnimation(Motion.tab, completionCriteria: .logicallyComplete) {
+            tab = item
+        } completion: {
+            // 旧的完成回调不能清掉新一次切换还在滑出的页
+            if switchID == id { leaving = [] }
+        }
     }
 }
