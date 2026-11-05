@@ -43,7 +43,8 @@ struct RichText: View {
             case .text(let text):
                 Text("\(partial)\(Text(Self.linkify(text, links: links, color: linkColor)))")
             case .emote(let key):
-                if let image = images[key] {
+                // 内存里已有的表情直接用：不必先显示文字占位、等异步回填后再排一次版
+                if let image = images[key] ?? cachedEmote(key) {
                     Text("\(partial)\(Text(Image(uiImage: image)).baselineOffset(-size * 0.22))")
                 } else {
                     Text("\(partial)\(Text(verbatim: key))")
@@ -55,28 +56,75 @@ struct RichText: View {
         .task(id: emotes.keys.sorted()) { await loadEmotes() }
     }
 
-    private func loadEmotes() async {
-        let needed = emotes.filter { images[$0.key] == nil }
-        guard !needed.isEmpty else { return }
-        let point = size * 1.35
-        let pixel = point * scale
-        await withTaskGroup(of: (String, UIImage?).self) { group in
-            for (key, url) in needed {
-                group.addTask {
-                    guard let resized = url.biliResized(CGSize(width: pixel, height: pixel)) else { return (key, nil) }
-                    return (key, await ImagePipeline.shared.image(for: resized, maxPixel: pixel))
-                }
-            }
-            for await (key, image) in group {
-                guard let cg = image?.cgImage else { continue }
-                // 以像素宽度换算 scale，让表情在文字里正好是 point 大小
-                images[key] = UIImage(cgImage: cg, scale: CGFloat(cg.width) / point, orientation: .up)
-            }
-        }
+    private var emotePoint: CGFloat { size * 1.35 }
+
+    private func emoteRequest(_ key: String) -> URL? {
+        let pixel = emotePoint * scale
+        return emotes[key]?.biliResized(CGSize(width: pixel, height: pixel))
     }
 
-    /// 把一段纯文字里的可点内容变成带 link 的 AttributedString（按出现位置从左到右，不重叠）
+    /// 以像素宽度换算 scale，让表情在文字里正好是 point 大小
+    private func sized(_ image: UIImage) -> UIImage? {
+        guard let cg = image.cgImage else { return nil }
+        return UIImage(cgImage: cg, scale: CGFloat(cg.width) / emotePoint, orientation: .up)
+    }
+
+    private func cachedEmote(_ key: String) -> UIImage? {
+        emoteRequest(key).flatMap { ImageMemory.shared.image(for: $0) }.flatMap { sized($0) }
+    }
+
+    /// 没缓存的表情并发取回，全部到齐后一次写入（每回来一张就写一次会让整段正文重算好几遍）
+    private func loadEmotes() async {
+        let needed = emotes.keys.filter { images[$0] == nil && cachedEmote($0) == nil }
+        guard !needed.isEmpty else { return }
+        let pixel = emotePoint * scale
+        let requests = needed.compactMap { key in emoteRequest(key).map { (key, $0) } }
+        var loaded: [String: UIImage] = [:]
+        await withTaskGroup(of: (String, UIImage?).self) { group in
+            for (key, url) in requests {
+                group.addTask { (key, await ImagePipeline.shared.image(for: url, maxPixel: pixel)) }
+            }
+            for await (key, image) in group {
+                if let image, let fitted = sized(image) { loaded[key] = fitted }
+            }
+        }
+        guard !loaded.isEmpty, !Task.isCancelled else { return }
+        images.merge(loaded) { _, new in new }
+    }
+
+    // MARK: 链接
+
+    private final class Linked {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    /// 解析结果按「文字 + 链接信息」缓存（不含颜色，颜色显示时再上）：评论重绘、表情回填时不再重新扫描正则
+    private static let linkCache: NSCache<NSString, Linked> = {
+        let cache = NSCache<NSString, Linked>()
+        cache.countLimit = 600
+        return cache
+    }()
+
+    /// 把一段纯文字里的可点内容变成带 link 的 AttributedString，链接上强调色
     static func linkify(_ text: String, links: Links, color: Color) -> AttributedString {
+        let mentions = links.mentions.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+        let jumps = links.jumps.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+        let key = "\(links.timestamps ? 1 : 0)|\(mentions)|\(jumps)|\(text)" as NSString
+        var result: AttributedString
+        if let hit = linkCache.object(forKey: key) {
+            result = hit.value
+        } else {
+            result = scan(text, links: links)
+            linkCache.setObject(Linked(result), forKey: key)
+        }
+        let linkRanges = result.runs.filter { $0.link != nil }.map(\.range)
+        for range in linkRanges { result[range].foregroundColor = color }
+        return result
+    }
+
+    /// 按出现位置从左到右找出可点内容（不重叠），不上颜色
+    private static func scan(_ text: String, links: Links) -> AttributedString {
         var matches: [(range: Range<String.Index>, url: URL)] = []
         func add(_ range: Range<String.Index>, _ url: URL?) {
             guard let url, !matches.contains(where: { $0.range.overlaps(range) }) else { return }
@@ -117,7 +165,6 @@ struct RichText: View {
             if cursor < range.lowerBound { result += AttributedString(String(text[cursor..<range.lowerBound])) }
             var piece = AttributedString(String(text[range]))
             piece.link = url
-            piece.foregroundColor = color
             result += piece
             cursor = range.upperBound
         }

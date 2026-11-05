@@ -103,13 +103,14 @@ struct FullscreenOverlay: View {
                     .transition(.move(edge: .trailing))
                 }
             }
+            // 面板的动画只作用在面板这一层：以前挂在整个控件层上，同一次更新里其它可动画属性也会跟着走 420ms
+            .animation(Motion.tab, value: panel)
         }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
         .animation(Motion.micro, value: showControls)
         .animation(Motion.micro, value: hud)
         .animation(Motion.micro, value: toast)
-        .animation(Motion.tab, value: panel)
         .sensoryFeedback(.impact(weight: .light), trigger: locked)
         .onAppear { scheduleHide() }
         .onChange(of: hold) { _, hold in

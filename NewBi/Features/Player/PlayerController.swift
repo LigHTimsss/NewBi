@@ -22,7 +22,7 @@ struct QualityOption: Identifiable, Hashable, Sendable {
 @MainActor
 @Observable
 final class PlayerController {
-    static let speeds: [Float] = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
+    static let speeds: [Float] = [0.5, 0.75, 1, 1.5, 2, 3]
 
     private enum Stage {
         case systemDash, ffmpegDash, systemMP4

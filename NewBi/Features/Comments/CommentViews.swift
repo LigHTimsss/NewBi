@@ -22,7 +22,8 @@ struct CommentSection: View {
                 }
                 ForEach(Array(model.replies.enumerated()), id: \.element.id) { index, reply in
                     row(reply)
-                        .riseIn(index: index)
+                        // 浮窗里不做逐条入场：浮窗每次打开都会重建，前 8 条会和滑入动画叠着再淡入一遍
+                        .riseIn(index: onClose == nil ? index : Int.max)
                         .onAppear { model.loadMore(after: reply) }
                 }
                 footer

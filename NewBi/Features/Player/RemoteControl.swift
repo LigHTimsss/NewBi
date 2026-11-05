@@ -165,7 +165,7 @@ final class RemoteControl {
             guard let position = (event as? MPChangePlaybackPositionCommandEvent)?.positionTime else { return .commandFailed }
             return Self.perform { $0.seek(seconds: position) }
         }
-        commands.changePlaybackRateCommand.supportedPlaybackRates = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
+        commands.changePlaybackRateCommand.supportedPlaybackRates = [0.5, 0.75, 1, 1.5, 2, 3]
         commands.changePlaybackRateCommand.addTarget { @Sendable event in
             guard let rate = (event as? MPChangePlaybackRateCommandEvent)?.playbackRate else { return .commandFailed }
             return Self.perform { $0.setRate(rate) }

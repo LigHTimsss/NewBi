@@ -1,4 +1,5 @@
 import UIKit
+import CoreText
 import QuartzCore
 
 /// 对应全屏播放器「弹幕设置」抽屉
@@ -50,8 +51,39 @@ final class DanmakuEngine {
         didSet {
             layer.opacity = settings.opacity
             rebuildTracks()
+            // 字号变了：提前画好的位图作废
+            if settings.fontSize != oldValue.fontSize { invalidatePrepared() }
         }
     }
+
+    /// 画好的一条弹幕位图（CGImage 不可变，只读地跨线程传递）
+    private final class Rendered: @unchecked Sendable {
+        let image: CGImage
+        let size: CGSize
+        let time: Double
+
+        init(image: CGImage, size: CGSize, time: Double) {
+            self.image = image
+            self.size = size
+            self.time = time
+        }
+    }
+
+    private struct RenderJob: Sendable {
+        let key: String
+        let content: String
+        let color: UInt32
+        let fontSize: CGFloat
+        let time: Double
+    }
+
+    /// 接下来 1.5 秒内要出现的弹幕，提前在后台画好；spawn 时直接取用，主线程只做排轨和挂图层
+    private var prepared: [String: Rendered] = [:]
+    private var preparing: Set<String> = []
+    /// 已经安排过预画的位置（items 下标）
+    private var prefetchCursor = 0
+    /// 字号 / 屏幕倍率 / 换视频时加一：之前在路上的预画结果不再收下
+    private var renderGeneration = 0
 
     private var items: [Danmaku] = []
     private var cursor = 0
@@ -94,6 +126,7 @@ final class DanmakuEngine {
         loadedSegments = []
         inflightSegments = []
         segmentFailures = [:]
+        invalidatePrepared()
         clear()
         requestSegment(1)
     }
@@ -161,6 +194,7 @@ final class DanmakuEngine {
             items.append(contentsOf: fresh)
         }
         cursor = items.lowerBound(of: max(lastTime, 0))
+        prefetchCursor = cursor
     }
 
     // MARK: 布局与时钟
@@ -170,6 +204,7 @@ final class DanmakuEngine {
         CATransaction.setDisableActions(true)
         layer.frame = bounds
         CATransaction.commit()
+        if scale != self.scale { invalidatePrepared() }
         self.scale = scale
         guard bounds.size != size else { return }
         size = bounds.size
@@ -185,6 +220,8 @@ final class DanmakuEngine {
         if lastTime < 0 || time < lastTime || time - lastTime > 2 {
             clear()
             cursor = items.lowerBound(of: time)
+            prefetchCursor = cursor
+            prepared = prepared.filter { $0.value.time >= time - 1 }
         }
 
         // 分段懒加载 + 段末 30 秒预取
@@ -198,6 +235,54 @@ final class DanmakuEngine {
             let item = items[cursor]
             cursor += 1
             if time - item.time < 1, shouldShow(item, now: now) { spawn(item, now: now) }
+        }
+        prefetch(until: time + 1.5)
+    }
+
+    // MARK: 提前画位图
+
+    private func invalidatePrepared() {
+        renderGeneration += 1
+        prepared = [:]
+        preparing = []
+        prefetchCursor = cursor
+    }
+
+    private static func key(_ item: Danmaku) -> String {
+        "\(item.time)|\(item.color)|\(item.fontSize)|\(item.content)"
+    }
+
+    private func displayFontSize(_ item: Danmaku) -> CGFloat {
+        item.fontSize <= 18 ? settings.fontSize * 0.8 : item.fontSize >= 36 ? settings.fontSize * 1.3 : settings.fontSize
+    }
+
+    /// 把接下来一小段时间里可能出现的弹幕交给后台画（每轮最多 48 条、缓存最多约 240 张，用掉或过时即丢）
+    private func prefetch(until limit: Double) {
+        var jobs: [RenderJob] = []
+        var index = max(cursor, prefetchCursor)
+        while index < items.count, items[index].time <= limit, jobs.count < 48 {
+            let item = items[index]
+            index += 1
+            guard mayShow(item) else { continue }
+            let key = Self.key(item)
+            guard prepared[key] == nil, !preparing.contains(key) else { continue }
+            preparing.insert(key)
+            jobs.append(RenderJob(key: key, content: item.content, color: item.color, fontSize: displayFontSize(item), time: item.time))
+        }
+        prefetchCursor = index
+        guard !jobs.isEmpty else { return }
+        let scale = scale, generation = renderGeneration
+        Task {
+            let results = await Task.detached(priority: .utility) { () -> [(String, Rendered)] in
+                jobs.compactMap { job in
+                    DanmakuEngine.rasterize(job.content, color: job.color, fontSize: job.fontSize, scale: scale,
+                                            inset: 2, bordered: false, time: job.time).map { (job.key, $0) }
+                }
+            }.value
+            guard generation == renderGeneration else { return }
+            for job in jobs { preparing.remove(job.key) }
+            for (key, rendered) in results { prepared[key] = rendered }
+            if prepared.count > 240 { prepared = prepared.filter { $0.value.time >= lastTime - 1 } }
         }
     }
 
@@ -257,13 +342,19 @@ final class DanmakuEngine {
         bottomTracks = Array(repeating: 0, count: fixedCount)
     }
 
-    private func shouldShow(_ item: Danmaku, now: CFTimeInterval) -> Bool {
-        guard active.count < settings.maxOnScreen, item.mode <= 6 else { return false } // 高级/代码弹幕暂不支持
+    /// 按设置会不会显示（不看屏上数量、不记重复）：预画时用来跳过一定不会出现的
+    private func mayShow(_ item: Danmaku) -> Bool {
+        guard item.mode <= 6 else { return false } // 高级/代码弹幕暂不支持
         let fixed = item.mode == 4 || item.mode == 5
         if fixed ? settings.hideFixed : settings.hideScroll { return false }
         if settings.hideBottom, item.mode == 4 { return false }
         if settings.hideColored, item.color & 0xFFFFFF != 0xFFFFFF { return false }
         if settings.keywordFilterEnabled, settings.blockedKeywords.contains(where: { item.content.contains($0) }) { return false }
+        return true
+    }
+
+    private func shouldShow(_ item: Danmaku, now: CFTimeInterval) -> Bool {
+        guard active.count < settings.maxOnScreen, mayShow(item) else { return false }
         if settings.hideDuplicates {
             if let last = recent[item.content], now - last < 8 { return false }
             recent[item.content] = now
@@ -282,10 +373,16 @@ final class DanmakuEngine {
             guard tracks.contains(where: { $0 <= now }) else { return }
         }
 
-        let text = attributedText(item)
-        let inset: CGFloat = own ? 6 : 2
-        let raw = text.size()
-        let textSize = CGSize(width: ceil(raw.width) + inset * 2, height: ceil(raw.height) + 2)
+        // 后台已经画好就直接用；没赶上（刚拖动过、密度太高）才在这里当场画
+        let rendered: Rendered
+        if !own, let ready = prepared.removeValue(forKey: Self.key(item)) {
+            rendered = ready
+        } else {
+            guard let fresh = Self.rasterize(item.content, color: item.color, fontSize: displayFontSize(item), scale: scale,
+                                             inset: own ? 6 : 2, bordered: own, time: item.time) else { return }
+            rendered = fresh
+        }
+        let textSize = rendered.size
 
         let track: Int
         let hold: CFTimeInterval
@@ -302,7 +399,7 @@ final class DanmakuEngine {
             track = index
         }
 
-        guard let image = render(text, size: textSize, inset: inset, bordered: own) else { return }
+        let image = rendered.image
         let sublayer = pool.popLast() ?? CALayer()
 
         CATransaction.begin()
@@ -361,32 +458,42 @@ final class DanmakuEngine {
         if pool.count < 120 { pool.append(sublayer) }
     }
 
-    private func attributedText(_ item: Danmaku) -> NSAttributedString {
-        let fontSize = item.fontSize <= 18 ? settings.fontSize * 0.8 : item.fontSize >= 36 ? settings.fontSize * 1.3 : settings.fontSize
-        return NSAttributedString(string: item.content, attributes: [
-            .font: UIFont.systemFont(ofSize: fontSize, weight: .bold),
-            .foregroundColor: UIColor(rgb: item.color),
-            .strokeColor: UIColor.black.withAlphaComponent(0.55),
-            .strokeWidth: -2.5,
-        ])
-    }
-
-    /// 文字 + 描边一次性画成位图，之后只做合成（只给已经抢到轨道的弹幕画）
-    private func render(_ text: NSAttributedString, size: CGSize, inset: CGFloat, bordered: Bool) -> CGImage? {
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = scale
-        format.opaque = false
-        let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
-            if bordered {
-                let frame = CGRect(origin: .zero, size: size).insetBy(dx: 0.5, dy: 0.5)
-                let path = UIBezierPath(roundedRect: frame, cornerRadius: size.height / 2)
-                UIColor.white.setStroke()
-                path.lineWidth = 1
-                path.stroke()
-            }
-            text.draw(at: CGPoint(x: inset, y: 1))
+    /// 文字 + 描边一次性画成位图，之后只做合成。用 Core Text 直接画进位图上下文（不走 UIKit 的字符串绘制），
+    /// 后台线程可以安全调用：预画和当场画是同一个函数，画出来完全一样
+    /// （粗体系统字、按弹幕颜色填充、55% 黑色描边，左右各留 inset，上下各留 1pt）
+    private nonisolated static func rasterize(_ content: String, color: UInt32, fontSize: CGFloat, scale: CGFloat,
+                                              inset: CGFloat, bordered: Bool, time: Double) -> Rendered? {
+        let font = UIFont.systemFont(ofSize: fontSize, weight: .bold)
+        let fill = CGColor(srgbRed: CGFloat((color >> 16) & 0xFF) / 255, green: CGFloat((color >> 8) & 0xFF) / 255,
+                           blue: CGFloat(color & 0xFF) / 255, alpha: 1)
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): fill,
+            NSAttributedString.Key(kCTStrokeColorAttributeName as String): CGColor(gray: 0, alpha: 0.55),
+            NSAttributedString.Key(kCTStrokeWidthAttributeName as String): NSNumber(value: -2.5),
+        ]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: content, attributes: attributes))
+        var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+        let width = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
+        let size = CGSize(width: ceil(width) + inset * 2, height: ceil(ascent + descent + leading) + 2)
+        let pixelWidth = Int(ceil(size.width * scale)), pixelHeight = Int(ceil(size.height * scale))
+        guard pixelWidth > 0, pixelHeight > 0, let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: pixelWidth, height: pixelHeight, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        if bordered {
+            let frame = CGRect(origin: .zero, size: size).insetBy(dx: 0.5, dy: 0.5)
+            let radius = min(frame.height, frame.width) / 2
+            context.addPath(CGPath(roundedRect: frame, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            context.setStrokeColor(CGColor(gray: 1, alpha: 1))
+            context.setLineWidth(1)
+            context.strokePath()
         }
-        return image.cgImage
+        // 位图坐标原点在左下：基线放在离顶部 1pt + ascent 处，与原来 UIKit 的 draw(at: (inset, 1)) 一致
+        context.textPosition = CGPoint(x: inset, y: size.height - 1 - ascent)
+        CTLineDraw(line, context)
+        guard let image = context.makeImage() else { return nil }
+        return Rendered(image: image, size: size, time: time)
     }
 }
 
@@ -398,17 +505,6 @@ private extension Array where Element == Danmaku {
             if self[mid].time < time { low = mid + 1 } else { high = mid }
         }
         return low
-    }
-}
-
-private extension UIColor {
-    convenience init(rgb: UInt32) {
-        self.init(
-            red: CGFloat((rgb >> 16) & 0xFF) / 255,
-            green: CGFloat((rgb >> 8) & 0xFF) / 255,
-            blue: CGFloat(rgb & 0xFF) / 255,
-            alpha: 1
-        )
     }
 }
 
