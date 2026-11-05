@@ -281,6 +281,8 @@ struct VideoDetailView: View {
     @Environment(SessionStore.self) private var session
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var parentOpenURL
+    /// 舞台上的视频页没有导航栈：进 UP 主空间交给 RootView（先收进胶囊再推入）
+    @Environment(\.openRoute) private var openRoute
     @AppStorage("backgroundPlay") private var backgroundPlay = true
 
     var body: some View {
@@ -371,6 +373,14 @@ struct VideoDetailView: View {
                         model: model,
                         locked: $locked,
                         onExit: { setFullscreen(false) },
+                        // 全屏里点 UP 主：先退出全屏、等转回竖屏，再进空间
+                        onUploader: { mid in
+                            setFullscreen(false)
+                            Task {
+                                try? await Task.sleep(for: .milliseconds(450))
+                                openRoute?(Route.space(mid: mid))
+                            }
+                        },
                         onFavorite: requestFavorite
                     )
                 } else {

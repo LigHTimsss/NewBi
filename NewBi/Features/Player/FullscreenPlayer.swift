@@ -28,6 +28,8 @@ struct FullscreenOverlay: View {
     let model: VideoDetailModel
     @Binding var locked: Bool
     var onExit: () -> Void
+    /// 点左上角 UP 主：退出全屏后进他的空间
+    var onUploader: (Int) -> Void
     var onFavorite: () -> Void
 
     @State private var showControls = true
@@ -38,7 +40,8 @@ struct FullscreenOverlay: View {
     @State private var message = ""
     @State private var toast: String?
     @FocusState private var inputFocused: Bool
-    @GestureState private var holding = false
+    /// 长按临时倍速：按住中；上滑超过一段距离进入 3 倍速，松手恢复原速
+    @GestureState private var hold = Hold()
     @Environment(\.accent) private var accent
 
     private var player: PlayerController { model.player }
@@ -78,20 +81,27 @@ struct FullscreenOverlay: View {
                     .transition(.opacity)
             }
 
-            if let panel {
-                HStack(spacing: 0) {
-                    // 点击抽屉外关闭
-                    Color.clear
-                        .contentShape(.rect)
-                        .onTapGesture { self.panel = nil }
-                        .accessibilityLabel("关闭面板")
-                    if panel == .comments {
-                        CommentsPanel(model: model.comments) { self.panel = nil }
-                    } else {
-                        PlayerDrawer(panel: panel, controller: player, model: model) { self.panel = nil }
+            if panel != nil {
+                // 点击抽屉外关闭（透明，不跟着滑）
+                Color.clear
+                    .contentShape(.rect)
+                    .onTapGesture { closePanel() }
+                    .accessibilityLabel("关闭面板")
+            }
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                if let panel {
+                    Group {
+                        if panel == .comments {
+                            CommentsPanel(model: model.comments) { closePanel() }
+                        } else {
+                            PlayerDrawer(panel: panel, controller: player, model: model) { closePanel(then: $0) }
+                        }
                     }
+                    // 只按抽屉自己的宽度滑进滑出：以前连同整屏宽的透明层一起平移，
+                    // 横屏下位移是抽屉宽度的两倍多，同样 420ms 走完显得一顿一顿
+                    .transition(.move(edge: .trailing))
                 }
-                .transition(.move(edge: .trailing))
             }
         }
         .environment(\.colorScheme, .dark)
@@ -102,9 +112,9 @@ struct FullscreenOverlay: View {
         .animation(Motion.tab, value: panel)
         .sensoryFeedback(.impact(weight: .light), trigger: locked)
         .onAppear { scheduleHide() }
-        .onChange(of: holding) { _, on in
-            player.setBoost(on)
-            hud = on && player.isBoosting ? .boost(player.boostRate) : nil
+        .onChange(of: hold) { _, hold in
+            player.setBoost(hold.active, fast: hold.fast)
+            hud = hold.active && player.isBoosting ? .boost(player.boostRate) : nil
         }
         .onChange(of: panel) { scheduleHide() }
         .onChange(of: inputFocused) { scheduleHide() }
@@ -121,7 +131,7 @@ struct FullscreenOverlay: View {
                     player.togglePlay()
                 }
                 .onTapGesture {
-                    if panel != nil { panel = nil; return }
+                    if panel != nil { closePanel(); return }
                     inputFocused = false
                     showControls.toggle()
                     scheduleHide()
@@ -132,12 +142,28 @@ struct FullscreenOverlay: View {
         .ignoresSafeArea()
     }
 
-    /// 长按：临时倍速
+    /// 收起抽屉；`then` 在收起动画结束后才执行（换画质、改倍速这类重活不和动画抢主线程）
+    private func closePanel(then next: (@MainActor () -> Void)? = nil) {
+        withAnimation(Motion.tab, completionCriteria: .logicallyComplete) {
+            panel = nil
+        } completion: {
+            next?()
+        }
+    }
+
+    private struct Hold: Equatable {
+        var active = false
+        var fast = false
+    }
+
+    /// 长按：临时倍速（2 倍，已在 2 倍以上时 3 倍）；按住后手指往上滑 40pt 进入 3 倍，滑回来降回，松手恢复原速
     private var holdGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.4)
             .sequenced(before: DragGesture(minimumDistance: 0))
-            .updating($holding) { value, state, _ in
-                if case .second(true, _) = value { state = true }
+            .updating($hold) { value, state, _ in
+                guard case .second(true, let drag) = value else { return }
+                state.active = true
+                state.fast = (drag?.translation.height ?? 0) < -40
             }
     }
 
@@ -145,7 +171,7 @@ struct FullscreenOverlay: View {
     private func panGesture(in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
-                guard !holding else { return }
+                guard !hold.active else { return }
                 if pan == nil {
                     let horizontal = abs(value.translation.width) > abs(value.translation.height)
                     if horizontal {
@@ -255,16 +281,25 @@ struct FullscreenOverlay: View {
     @ViewBuilder
     private var uploaderChip: some View {
         if let owner = model.detail?.owner {
-            HStack(spacing: 8) {
-                RemoteImage(url: owner.face, size: CGSize(width: 26, height: 26))
-                    .frame(width: 26, height: 26)
-                    .clipShape(.circle)
-                Text(owner.name).font(.system(size: 14, weight: .medium))
+            Button { onUploader(owner.mid) } label: {
+                HStack(spacing: 8) {
+                    RemoteImage(url: owner.face, size: CGSize(width: 26, height: 26))
+                        .frame(width: 26, height: 26)
+                        .clipShape(.circle)
+                    Text(owner.name).font(.system(size: 14, weight: .medium))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                .padding(.leading, 4)
+                .padding(.trailing, 12)
+                .frame(height: 34)
+                .contentShape(.capsule)
             }
-            .padding(.leading, 4)
-            .padding(.trailing, 14)
-            .frame(height: 34)
+            .buttonStyle(PressableStyle())
             .glassEffect(.clear.interactive(), in: .capsule)
+            .accessibilityLabel("UP 主 \(owner.name)")
+            .accessibilityHint("退出全屏，进入 UP 主空间")
         }
     }
 

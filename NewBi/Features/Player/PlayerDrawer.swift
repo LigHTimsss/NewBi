@@ -8,7 +8,19 @@ struct PlayerDrawer: View {
     let panel: PlayerPanel
     let controller: PlayerController
     let model: VideoDetailModel
-    var onClose: () -> Void
+    /// 收起抽屉，收起动画结束后执行传入的动作（换画质、改倍速）
+    var onClose: (@escaping @MainActor () -> Void) -> Void
+
+    /// 倍速、画质只放一列按钮：收窄到刚好放得下文字
+    private var width: CGFloat {
+        switch panel {
+        case .speed: 150
+        case .quality: 236
+        default: 384
+        }
+    }
+
+    private var narrow: Bool { panel == .speed || panel == .quality }
 
     var body: some View {
         ScrollView {
@@ -23,12 +35,12 @@ struct PlayerDrawer: View {
                 case .comments: EmptyView()
                 }
             }
-            .padding(.leading, 22)
-            .padding(.trailing, 16)
+            .padding(.leading, narrow ? 14 : 22)
+            .padding(.trailing, narrow ? 14 : 16)
             .padding(.vertical, 22)
         }
         .scrollIndicators(.hidden)
-        .frame(width: 384)
+        .frame(width: width)
         .background {
             // 大面积用 Material，比 glassEffect 便宜；颜色压暗到设计稿的 rgba(14,14,18,.72)
             Rectangle()
@@ -323,7 +335,7 @@ private struct TrailingIconLabelStyle: LabelStyle {
 
 private struct QualityPanel: View {
     let controller: PlayerController
-    var onClose: () -> Void
+    var onClose: (@escaping @MainActor () -> Void) -> Void
     @Environment(\.accent) private var accent
 
     var body: some View {
@@ -335,11 +347,11 @@ private struct QualityPanel: View {
             ForEach(controller.qualities) { option in
                 let on = option.id == controller.quality
                 Button {
-                    onClose()
-                    Task { await controller.changeQuality(option.id) }
+                    // 换画质要重新取流、建本地代理：等抽屉收完再做，不和收起动画抢主线程
+                    onClose { Task { await controller.changeQuality(option.id) } }
                 } label: {
                     HStack(spacing: 8) {
-                        Text(option.name).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(option.name).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity, alignment: .leading)
                         if option.needsVIP || !option.available {
                             // 拿不到的档位：大会员档标「大会员」，其余多为未登录限制
                             Text(option.needsVIP ? "大会员" : "登录")
@@ -381,38 +393,39 @@ private struct QualityPanel: View {
 
 // MARK: - 倍速
 
+/// 倍速：竖排一列，从快到慢；选中后先收起抽屉，动画结束再换速度（换速度会重排屏上的弹幕）
 private struct SpeedPanel: View {
     let controller: PlayerController
-    var onClose: () -> Void
+    var onClose: (@escaping @MainActor () -> Void) -> Void
     @Environment(\.accent) private var accent
 
     var body: some View {
         PanelTitle("倍速")
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
-            ForEach(PlayerController.speeds, id: \.self) { speed in
+        VStack(spacing: 6) {
+            ForEach(PlayerController.speeds.reversed(), id: \.self) { speed in
                 let on = speed == controller.rate
                 Button {
-                    controller.setRate(speed)
-                    onClose()
+                    onClose { controller.setRate(speed) }
                 } label: {
                     Text(speed.speedLabel)
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 15, weight: on ? .semibold : .medium))
                         .monospacedDigit()
                         .foregroundStyle(on ? accent : .white)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                        .background(.white.opacity(on ? 0.16 : 0.08), in: .rect(cornerRadius: 14))
+                        .frame(maxWidth: .infinity, minHeight: 42)
+                        .background(.white.opacity(on ? 0.16 : 0.08), in: .rect(cornerRadius: 12))
                         .overlay {
-                            if on { RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.3), lineWidth: 0.5) }
+                            if on { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.3), lineWidth: 0.5) }
                         }
-                        .shadow(color: on ? accent.opacity(0.3) : .clear, radius: 7)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(PressableStyle())
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
-        Text("播放中长按画面，可临时倍速播放")
-            .font(.system(size: 12))
+        Text("长按画面临时倍速，按住上滑 3 倍")
+            .font(.system(size: 11))
             .foregroundStyle(secondaryOnDark)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 12)
     }
 }

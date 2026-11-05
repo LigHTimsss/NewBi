@@ -22,7 +22,7 @@ struct QualityOption: Identifiable, Hashable, Sendable {
 @MainActor
 @Observable
 final class PlayerController {
-    static let speeds: [Float] = [0.5, 0.75, 1, 1.25, 1.5, 2]
+    static let speeds: [Float] = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 
     private enum Stage {
         case systemDash, ffmpegDash, systemMP4
@@ -118,7 +118,8 @@ final class PlayerController {
         set { engine.volume = newValue }
     }
 
-    var boostRate: Float { rate >= 2 ? 3 : 2 }
+    /// 长按画面时的临时倍速：默认 2 倍（已在 2 倍及以上时 3 倍）；长按中手指上滑提到 3 倍
+    private(set) var boostRate: Float = 2
     var supportsPictureInPicture: Bool { engine.supportsPictureInPicture }
     var isPictureInPictureActive: Bool { engine.isPictureInPictureActive }
 
@@ -580,10 +581,18 @@ final class PlayerController {
     }
 
     /// 长按画面临时倍速（弹幕一起加速）
-    func setBoost(_ on: Bool) {
-        guard on != isBoosting, isPlaying || !on else { return }
-        isBoosting = on
-        let effective = on ? boostRate : rate
+    /// - Parameter fast: 长按中手指上滑：3 倍速（滑回来降回 2 倍）
+    func setBoost(_ on: Bool, fast: Bool = false) {
+        let target: Float = fast || rate >= 2 ? 3 : 2
+        if on {
+            guard isPlaying, !isBoosting || boostRate != target else { return }
+            isBoosting = true
+            boostRate = target
+        } else {
+            guard isBoosting else { return }
+            isBoosting = false
+        }
+        let effective = isBoosting ? boostRate : rate
         engine.setRate(effective)
         // 暂停中松手：弹幕保持暂停，等真正开始播放时由 tick 按当时的速度恢复
         if isPlaying { danmaku.resume(rate: effective) }
