@@ -92,6 +92,7 @@ struct QRScannerView: View {
     @State private var resolving = false
     @State private var result: ScanTarget?
     @State private var pickerItem: PhotosPickerItem?
+    @State private var showPhotos = false
     @State private var torchOn = false
     @State private var hits = 0
     @State private var sweep = false
@@ -136,6 +137,7 @@ struct QRScannerView: View {
         .toast($toast, bottomPadding: 150)
         .statusBarHidden()
         .task { await checkAccess() }
+        .photosPicker(isPresented: $showPhotos, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
             pickerItem = nil
@@ -187,7 +189,9 @@ struct QRScannerView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 56) {
-            PhotosPicker(selection: $pickerItem, matching: .images) {
+            // 用普通按钮 + .photosPicker 弹出相册：PhotosPicker 的标签闭包不在主线程隔离里，
+            // 在里面调用本视图的方法 Swift 6 编译不过
+            Button { showPhotos = true } label: {
                 roundLabel("photo.on.rectangle", "相册")
             }
             .buttonStyle(PressableStyle())
