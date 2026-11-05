@@ -238,6 +238,7 @@ final class PlayerController {
         stage = Self.initialStage
         failedCodecs = []
         lastSameStageRetry = nil
+        offlineFailure = nil
         error = nil
         hasFrame = false // 新的一 P 出第一帧前盖着封面
         localRecord = DownloadManager.shared.completed(bvid: bvid, cid: cid)
@@ -282,6 +283,7 @@ final class PlayerController {
         stage = Self.initialStage
         failedCodecs = []
         lastSameStageRetry = nil
+        offlineFailure = nil
         error = nil
         let time = currentTime > 0 ? currentTime : nil
         let qn = quality > 0 ? quality : Self.defaultQuality
@@ -530,8 +532,11 @@ final class PlayerController {
         switch stage {
         case .systemDash:
             let ffmpegAllowed = Self.enginePreference != "system" && EngineFactory.ffmpegAvailable
+            // 离线缓存只在能读本地文件的两个引擎之间换，不悄悄改成在线播放（耗流量、掩盖本地问题）
+            if localRecord != nil, !ffmpegAllowed { return false }
             stage = ffmpegAllowed ? .ffmpegDash : .systemMP4
         case .ffmpegDash:
+            if localRecord != nil { return false }
             stage = .systemMP4
         case .systemMP4:
             return false

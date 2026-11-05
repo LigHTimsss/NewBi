@@ -283,9 +283,11 @@ final class LocalMediaServer: @unchecked Sendable {
         return Data(head.utf8)
     }
 
-    /// 只发响应头，正文随后分块发
+    /// 只发响应头，正文随后分块发。
+    /// 头、正文、收尾都用同一个 `.defaultStream` 上下文：TCP 上前一个上下文没结束，后一个永远不会被处理
+    /// （之前头用 defaultMessage、最后一块用 finalMessage，最后一块会一直排队，离线播放收不到数据）
     private func sendHead(_ connection: NWConnection, status: Int, headers: [String: String]) {
-        connection.send(content: Self.head(status: status, headers: headers), contentContext: .defaultMessage, isComplete: false, completion: .contentProcessed { _ in })
+        connection.send(content: Self.head(status: status, headers: headers), contentContext: .defaultStream, isComplete: false, completion: .contentProcessed { _ in })
     }
 
     /// 一次发完整个响应并关闭连接
@@ -294,7 +296,7 @@ final class LocalMediaServer: @unchecked Sendable {
         if headers["Content-Length"] == nil { headers["Content-Length"] = "\(body.count)" }
         var payload = Self.head(status: status, headers: headers)
         payload.append(body)
-        connection.send(content: payload, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+        connection.send(content: payload, contentContext: .defaultStream, isComplete: true, completion: .contentProcessed { _ in
             connection.cancel()
         })
     }
@@ -381,7 +383,7 @@ private final class FileStream: @unchecked Sendable {
         }
         remaining -= data.count
         let isLast = remaining == 0
-        connection.send(content: data, contentContext: isLast ? .finalMessage : .defaultMessage, isComplete: isLast, completion: .contentProcessed { error in
+        connection.send(content: data, contentContext: .defaultStream, isComplete: isLast, completion: .contentProcessed { error in
             if error != nil || isLast {
                 self.close()
             } else {
@@ -515,14 +517,14 @@ final class UpstreamRelay: NSObject, URLSessionDataDelegate, @unchecked Sendable
             default: break
             }
         }
-        relay.connection.send(content: LocalMediaServer.head(status: status, headers: headers), contentContext: .defaultMessage, isComplete: false, completion: .contentProcessed { _ in })
+        relay.connection.send(content: LocalMediaServer.head(status: status, headers: headers), contentContext: .defaultStream, isComplete: false, completion: .contentProcessed { _ in })
         return true
     }
 
     private func forward(_ data: Data, _ relay: Relay) {
         let count = data.count
         relay.pending += count
-        relay.connection.send(content: data, contentContext: .defaultMessage, isComplete: false, completion: .contentProcessed { error in
+        relay.connection.send(content: data, contentContext: .defaultStream, isComplete: false, completion: .contentProcessed { error in
             relay.pending -= count
             if error != nil {
                 relay.task.cancel()
@@ -540,7 +542,7 @@ final class UpstreamRelay: NSObject, URLSessionDataDelegate, @unchecked Sendable
 
     private func finish(_ relay: Relay) {
         let connection = relay.connection
-        connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+        connection.send(content: nil, contentContext: .defaultStream, isComplete: true, completion: .contentProcessed { _ in
             connection.cancel()
         })
     }
