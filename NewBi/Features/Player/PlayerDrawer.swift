@@ -422,7 +422,7 @@ private struct SpeedPanel: View {
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
-        Text("长按画面临时倍速，按住上滑 3 倍")
+        Text("播放中长按画面，临时 2 倍速")
             .font(.system(size: 11))
             .foregroundStyle(secondaryOnDark)
             .fixedSize(horizontal: false, vertical: true)

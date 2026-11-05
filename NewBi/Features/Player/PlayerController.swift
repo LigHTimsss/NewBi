@@ -22,7 +22,7 @@ struct QualityOption: Identifiable, Hashable, Sendable {
 @MainActor
 @Observable
 final class PlayerController {
-    static let speeds: [Float] = [0.5, 0.75, 1, 1.5, 2, 3]
+    static let speeds: [Float] = [0.5, 0.75, 1, 1.5, 2]
 
     private enum Stage {
         case systemDash, ffmpegDash, systemMP4
@@ -118,8 +118,8 @@ final class PlayerController {
         set { engine.volume = newValue }
     }
 
-    /// 长按画面时的临时倍速：默认 2 倍（已在 2 倍及以上时 3 倍）；长按中手指上滑提到 3 倍
-    private(set) var boostRate: Float = 2
+    /// 长按画面时的临时倍速。系统播放器播 HLS 超过 2 倍会跳帧卡顿，所以固定 2 倍（已经是 2 倍时长按不变速）
+    let boostRate: Float = 2
     var supportsPictureInPicture: Bool { engine.supportsPictureInPicture }
     var isPictureInPictureActive: Bool { engine.isPictureInPictureActive }
 
@@ -580,18 +580,12 @@ final class PlayerController {
         RemoteControl.shared.refresh(self)
     }
 
-    /// 长按画面临时倍速（弹幕一起加速）
-    /// - Parameter fast: 长按中手指上滑：3 倍速（滑回来降回 2 倍）
-    func setBoost(_ on: Bool, fast: Bool = false) {
-        let target: Float = fast || rate >= 2 ? 3 : 2
-        if on {
-            guard isPlaying, !isBoosting || boostRate != target else { return }
-            isBoosting = true
-            boostRate = target
-        } else {
-            guard isBoosting else { return }
-            isBoosting = false
-        }
+    /// 长按画面临时 2 倍速（弹幕一起加速）
+    func setBoost(_ on: Bool) {
+        guard on != isBoosting, isPlaying || !on else { return }
+        // 本来就在 2 倍：没有更快的可加
+        if on, rate >= boostRate { return }
+        isBoosting = on
         let effective = isBoosting ? boostRate : rate
         engine.setRate(effective)
         // 暂停中松手：弹幕保持暂停，等真正开始播放时由 tick 按当时的速度恢复

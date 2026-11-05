@@ -272,6 +272,8 @@ struct VideoDetailView: View {
     /// 简介 → 评论的横滑进度 0…1，Tab 下划线跟手
     @State private var pageProgress: CGFloat = 0
     @State private var isFullscreen = false
+    /// 竖屏视频的全屏：界面保持竖屏
+    @State private var portraitFullscreen = false
     @State private var locked = false
     /// 在画面上下拉收起：只认从画面里（进度条以上）开始的竖向拖动
     @State private var pulling: Bool?
@@ -456,13 +458,22 @@ struct VideoDetailView: View {
         showFavorite = true
     }
 
-    private func setFullscreen(_ on: Bool, preferred: UIInterfaceOrientationMask = .landscapeRight) {
+    /// 竖屏视频（按分 P / 视频的画面尺寸，离线时按缓存的那一路流）
+    private var isVerticalVideo: Bool {
+        if let dimension = model.currentPart?.dimension ?? model.detail?.dimension { return dimension.isVertical }
+        if let video = model.offline?.video, let width = video.width, let height = video.height { return height > width }
+        return false
+    }
+
+    /// - Parameter preferred: 横过手机进入全屏时转到的方向；点全屏按钮时为 nil（竖屏视频保持竖屏全屏）
+    private func setFullscreen(_ on: Bool, preferred: UIInterfaceOrientationMask? = nil) {
         if !on { locked = false }
+        portraitFullscreen = on && preferred == nil && isVerticalVideo
         isFullscreen = on
         // 全屏里不能收起（左右滑是拖进度）
         VideoStage.shared.isFullscreen = on
-        if on {
-            Orientation.lock(.landscape, preferred: preferred)
+        if on, !portraitFullscreen {
+            Orientation.lock(.landscape, preferred: preferred ?? .landscapeRight)
         } else {
             Orientation.lock(.portrait)
         }
@@ -471,9 +482,10 @@ struct VideoDetailView: View {
     private func followDeviceOrientation() {
         guard !locked, !model.player.isMinimized else { return }
         let device = UIDevice.current.orientation
-        if let mask = Orientation.interfaceMask(for: device), !isFullscreen {
+        // 竖屏视频横过手机不自动进横屏全屏；竖屏全屏时手机竖着也不退出
+        if let mask = Orientation.interfaceMask(for: device), !isFullscreen, !isVerticalVideo {
             setFullscreen(true, preferred: mask)
-        } else if device == .portrait, isFullscreen {
+        } else if device == .portrait, isFullscreen, !portraitFullscreen {
             setFullscreen(false)
         }
     }
@@ -548,6 +560,15 @@ private struct CompactOverlay: View {
     var onFullscreen: () -> Void
     @State private var showControls = true
     @State private var hideTask: Task<Void, Never>?
+    /// 在画面上左右滑：拖动进度
+    private enum DragMode: Equatable {
+        case seek(from: Double)
+        case ignore
+    }
+
+    @State private var dragMode: DragMode?
+    @State private var seekTarget: Double?
+    @State private var width: CGFloat = 1
     @Environment(\.accent) private var accent
 
     var body: some View {
@@ -556,15 +577,52 @@ private struct CompactOverlay: View {
             if showControls {
                 controls.transition(.opacity)
             }
+            if let seekTarget {
+                Text("\(Int(seekTarget).durationText) / \(Int(controller.duration).durationText)")
+                    .font(.system(size: 15, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .frame(height: 36)
+                    .background(.black.opacity(0.55), in: .capsule)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
         }
         .contentShape(.rect)
-        // 手势与 B 站一致：双击暂停/播放，单击显隐控件
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = max($0, 1) }
+        // 手势与 B 站一致：双击暂停/播放，单击显隐控件，左右滑拖进度
         .onTapGesture(count: 2) { controller.togglePlay() }
         .onTapGesture {
             withAnimation(Motion.micro) { showControls.toggle() }
             scheduleHide()
         }
+        .gesture(seekGesture)
+        .animation(Motion.micro, value: seekTarget == nil)
         .onAppear { scheduleHide() }
+    }
+
+    /// 横向拖动调进度（满宽 ≈ 90 秒，短视频按时长缩放）。第一下就分方向：竖向留给下拉收起，
+    /// 从左边缘开始的留给侧滑返回
+    private var seekGesture: some Gesture {
+        DragGesture(minimumDistance: 14)
+            .onChanged { value in
+                if dragMode == nil {
+                    let t = value.translation
+                    let horizontal = abs(t.width) > abs(t.height) * 1.2
+                    dragMode = horizontal && value.startLocation.x > 24 && controller.duration > 0
+                        ? .seek(from: controller.currentTime) : .ignore
+                }
+                guard case .seek(let start) = dragMode else { return }
+                let span = min(controller.duration, 90)
+                seekTarget = min(max(start + Double(value.translation.width / width) * span, 0), controller.duration)
+            }
+            .onEnded { _ in
+                if let seekTarget { controller.seek(seconds: seekTarget) }
+                seekTarget = nil
+                dragMode = nil
+                scheduleHide()
+            }
     }
 
     private var controls: some View {

@@ -39,8 +39,10 @@ struct FullscreenOverlay: View {
     @State private var hideTask: Task<Void, Never>?
     @State private var message = ""
     @State private var toast: String?
+    /// 横屏为 compact；竖屏视频的竖屏全屏为 regular
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @FocusState private var inputFocused: Bool
-    /// 长按临时倍速：按住中；上滑超过一段距离进入 3 倍速，松手恢复原速
+    /// 长按临时 2 倍速：按住中，松手恢复原速
     @GestureState private var hold = Hold()
     @Environment(\.accent) private var accent
 
@@ -98,6 +100,8 @@ struct FullscreenOverlay: View {
                             PlayerDrawer(panel: panel, controller: player, model: model) { closePanel(then: $0) }
                         }
                     }
+                    // 评论浮窗宽度可伸缩：先占满它要的宽度，剩下的才给左边的空白
+                    .layoutPriority(1)
                     // 只按抽屉自己的宽度滑进滑出：以前连同整屏宽的透明层一起平移，
                     // 横屏下位移是抽屉宽度的两倍多，同样 420ms 走完显得一顿一顿
                     .transition(.move(edge: .trailing))
@@ -114,7 +118,7 @@ struct FullscreenOverlay: View {
         .sensoryFeedback(.impact(weight: .light), trigger: locked)
         .onAppear { scheduleHide() }
         .onChange(of: hold) { _, hold in
-            player.setBoost(hold.active, fast: hold.fast)
+            player.setBoost(hold.active)
             hud = hold.active && player.isBoosting ? .boost(player.boostRate) : nil
         }
         .onChange(of: panel) { scheduleHide() }
@@ -154,17 +158,14 @@ struct FullscreenOverlay: View {
 
     private struct Hold: Equatable {
         var active = false
-        var fast = false
     }
 
-    /// 长按：临时倍速（2 倍，已在 2 倍以上时 3 倍）；按住后手指往上滑 40pt 进入 3 倍，滑回来降回，松手恢复原速
+    /// 长按：临时 2 倍速，松手恢复原速
     private var holdGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.4)
             .sequenced(before: DragGesture(minimumDistance: 0))
             .updating($hold) { value, state, _ in
-                guard case .second(true, let drag) = value else { return }
-                state.active = true
-                state.fast = (drag?.translation.height ?? 0) < -40
+                if case .second(true, _) = value { state.active = true }
             }
     }
 
@@ -318,16 +319,21 @@ struct FullscreenOverlay: View {
             }
             iconButton("slider.horizontal.3", "弹幕设置") { panel = .danmaku }
 
-            TextField("", text: $message, prompt: Text("发个友善的弹幕见证当下").foregroundStyle(.white.opacity(0.62)))
-                .font(.system(size: 14))
-                .focused($inputFocused)
-                .submitLabel(.send)
-                .onSubmit(send)
-                .padding(.horizontal, 18)
-                .frame(height: 40)
-                .glassEffect(.clear.interactive(), in: .capsule)
-                .padding(.horizontal, 8)
-                .accessibilityLabel("发送弹幕")
+            // 竖屏全屏（竖屏视频）放不下输入框：只留按钮
+            if verticalSizeClass == .compact {
+                TextField("", text: $message, prompt: Text("发个友善的弹幕见证当下").foregroundStyle(.white.opacity(0.62)))
+                    .font(.system(size: 14))
+                    .focused($inputFocused)
+                    .submitLabel(.send)
+                    .onSubmit(send)
+                    .padding(.horizontal, 18)
+                    .frame(height: 40)
+                    .glassEffect(.clear.interactive(), in: .capsule)
+                    .padding(.horizontal, 8)
+                    .accessibilityLabel("发送弹幕")
+            } else {
+                Spacer(minLength: 8)
+            }
 
             textButton(player.rate == 1 ? "倍速" : player.rate.speedLabel) { panel = .speed }
             textButton(qualityName) { panel = .quality }
@@ -444,7 +450,8 @@ private struct CommentsPanel: View {
     var body: some View {
         // 浮窗里没有导航栈：点头像不跳空间
         CommentSection(model: model, linksToSpace: false, onClose: onClose)
-            .frame(width: 400)
+            // 横屏 400 宽；竖屏全屏时屏幕窄，收到屏宽以内
+            .frame(maxWidth: 400)
             .frame(maxHeight: .infinity)
             .background {
                 // 大面积用 Material，比 glassEffect 便宜；和右侧抽屉同一个压暗色
@@ -462,7 +469,6 @@ private struct FullscreenProgress: View {
     let controller: PlayerController
     @State private var dragFraction: Double?
     @Environment(\.accent) private var accent
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let duration = controller.duration
@@ -481,19 +487,11 @@ private struct FullscreenProgress: View {
                     Capsule().fill(.white.opacity(0.25)).frame(height: 3)
                     Capsule().fill(.white.opacity(0.4)).frame(width: width * buffered, height: 3)
                     Capsule().fill(accent).frame(width: width * fraction, height: 3)
-                    // 光点呼吸 2.4s；用 scaleEffect 只影响渲染、不触发布局
+                    // 普通白色圆点：不发光、不呼吸
                     Circle()
                         .fill(.white)
-                        .frame(width: 14, height: 14)
-                        .shadow(color: accent, radius: 7)
-                        .phaseAnimator(reduceMotion ? [false] : [false, true]) { knob, expanded in
-                            knob.background {
-                                Circle()
-                                    .fill(accent.opacity(expanded ? 0.12 : 0.3))
-                                    .scaleEffect(expanded ? 2 : 1.57)
-                            }
-                        } animation: { _ in .easeInOut(duration: 1.2) }
-                        .offset(x: width * fraction - 7)
+                        .frame(width: 12, height: 12)
+                        .offset(x: width * fraction - 6)
                 }
                 .frame(maxHeight: .infinity)
                 .contentShape(.rect)

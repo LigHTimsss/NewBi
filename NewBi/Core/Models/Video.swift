@@ -69,11 +69,22 @@ struct PopularFeed: Decodable, Sendable {
     }
 }
 
+/// 画面尺寸；rotate 为 1 时宽高要对调
+struct VideoDimension: Decodable, Hashable, Sendable {
+    let width: Int
+    let height: Int
+    let rotate: Int?
+
+    /// 竖屏视频：全屏时保持竖屏
+    var isVertical: Bool { rotate == 1 ? width > height : height > width }
+}
+
 struct VideoPage: Decodable, Hashable, Sendable {
     let cid: Int
     let page: Int
     let part: String
     let duration: Int
+    let dimension: VideoDimension?
 }
 
 struct VideoDetail: Decodable, Sendable {
@@ -89,6 +100,7 @@ struct VideoDetail: Decodable, Sendable {
     let owner: Owner
     let stat: VideoStat
     let pages: [VideoPage]?
+    let dimension: VideoDimension?
 }
 
 /// 我和视频的关系（archive/relation）
