@@ -129,6 +129,49 @@ struct RelationInfo: Decodable, Sendable {
     let attribute: Int
 }
 
+/// 关注 / 粉丝列表里的一个人（/x/relation/followings、/x/relation/followers）
+struct RelationUser: Decodable, Identifiable, Sendable {
+    struct Vip: Decodable, Sendable {
+        let vipStatus: Int?
+    }
+
+    struct Official: Decodable, Sendable {
+        let type: Int?
+        let desc: String?
+    }
+
+    let mid: Int
+    /// 我对他：0 未关注 · 2 已关注 · 6 互相关注（1 悄悄关注、128 拉黑）
+    let attribute: Int?
+    let uname: String
+    let face: String?
+    let sign: String?
+    let vip: Vip?
+    let officialVerify: Official?
+
+    var id: Int { mid }
+    var isFollowing: Bool { attribute == 2 || attribute == 6 }
+    var isMutual: Bool { attribute == 6 }
+    var isVIP: Bool { vip?.vipStatus == 1 }
+
+    /// 认证说明优先，其次签名
+    var subtitle: String? {
+        if let desc = officialVerify?.desc, !desc.isEmpty { return desc }
+        if let sign, !sign.isEmpty { return sign }
+        return nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mid, attribute, uname, face, sign, vip
+        case officialVerify = "official_verify"
+    }
+}
+
+struct RelationPage: Decodable, Sendable {
+    let list: [RelationUser]?
+    let total: Int?
+}
+
 // MARK: 合集 / 系列
 
 /// 合集或系列里的一个视频（两个接口字段一致）

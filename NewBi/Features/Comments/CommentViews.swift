@@ -5,6 +5,8 @@ struct CommentSection: View {
     let model: CommentModel
     /// 半屏面板里不跳空间页（面板内没有对应的导航目标）
     var linksToSpace = true
+    /// 放在浮窗里时：标题栏右侧显示关闭按钮
+    var onClose: (() -> Void)? = nil
     @State private var draft = ""
     @State private var replyTarget: Reply?
     @State private var thread: Reply?
@@ -69,6 +71,18 @@ struct CommentSection: View {
                     .background(Theme.selection, in: .capsule)
             }
             .buttonStyle(PressableStyle())
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.secondaryText)
+                        .frame(width: 30, height: 30)
+                        .background(Theme.selection, in: .circle)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(PressableStyle())
+                .accessibilityLabel("关闭评论")
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)

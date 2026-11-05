@@ -1,4 +1,3 @@
-import ActivityKit
 import CoreGraphics
 import Foundation
 import os
@@ -11,7 +10,6 @@ import os
 /// - 地址过期（403/404/410）时按同画质同编码重新取流，每一路最多换 3 次、逐次退避
 /// - 一路失败时另一路一并停下（保留续传数据），整条记录标为失败，让出名额给排队的
 /// - 封面、弹幕跟着媒体任务走：遵守「仅 Wi-Fi」，暂停 / 删除 / 失败时取消
-/// - 下载中显示实况活动：灵动岛与锁屏上的总进度；结束时区分完成、暂停、失败、取消
 @MainActor
 @Observable
 final class DownloadManager {
@@ -31,10 +29,6 @@ final class DownloadManager {
     @ObservationIgnored private var refreshes: [String: Int] = [:]
     /// 每条记录的封面 / 弹幕任务；token 防止旧任务结束时清掉新任务的登记
     @ObservationIgnored private var extras: [String: (token: UUID, task: Task<Void, Never>)] = [:]
-    @ObservationIgnored private var activity: Activity<DownloadActivityAttributes>?
-    /// 这次实况活动期间出现过的记录：结束时据此判断是全部完成、暂停、失败还是取消
-    @ObservationIgnored private var activityMembers: Set<String> = []
-    @ObservationIgnored private var lastActivityUpdate = Date.distantPast
     private let maxConcurrent = 2
     private static let maxRefreshes = 3
 
@@ -173,7 +167,6 @@ final class DownloadManager {
             guard records.count(where: { $0.state == .downloading }) < maxConcurrent else { break }
             start(at: index)
         }
-        updateActivity(force: true)
     }
 
     /// 开始（或接着）下载一条记录里还没完成、也没有任务在跑的那几路
@@ -273,7 +266,6 @@ final class DownloadManager {
             records[index].audioBytes = written
             if expected > 0 { records[index].audioTotal = expected }
         }
-        updateActivity(force: false)
     }
 
     fileprivate func finished(_ event: TaskCompletion) {
@@ -449,75 +441,6 @@ final class DownloadManager {
             }
         }
         return coverSaved
-    }
-
-    // MARK: 实况活动（灵动岛）
-
-    private func updateActivity(force: Bool) {
-        let active = records.filter { $0.state == .downloading || $0.state == .waiting }
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        if active.isEmpty {
-            let state = finalState()
-            activityMembers = []
-            guard let activity else { return }
-            self.activity = nil
-            Self.endActivity(id: activity.id, state: state)
-            return
-        }
-        activityMembers.formUnion(active.map(\.id))
-        // 进度最多每秒刷新一次，省电
-        guard force || Date.now.timeIntervalSince(lastActivityUpdate) > 1 else { return }
-        lastActivityUpdate = .now
-        let total = active.reduce(Int64(0)) { $0 + $1.totalBytes }
-        let received = active.reduce(Int64(0)) { $0 + $1.receivedBytes }
-        let state = DownloadActivityAttributes.ContentState(
-            title: active.first(where: { $0.state == .downloading })?.title ?? active[0].title,
-            progress: total > 0 ? min(Double(received) / Double(total), 1) : 0,
-            remaining: active.count,
-            finished: false
-        )
-        if let activity {
-            Self.updateActivity(id: activity.id, state: state)
-        } else {
-            activity = try? Activity.request(attributes: DownloadActivityAttributes(), content: ActivityContent(state: state, staleDate: nil))
-        }
-    }
-
-    /// 没有在下的了：只有这次活动里的记录全部缓存好才显示「完成」；有失败的报失败，有暂停的报暂停，都删掉了算取消
-    private func finalState() -> DownloadActivityAttributes.ContentState {
-        let members = records.filter { activityMembers.contains($0.id) }
-        let failed = members.filter { $0.state == .failed }
-        let paused = members.filter { $0.state == .paused }
-        let total = members.reduce(Int64(0)) { $0 + $1.totalBytes }
-        let received = members.reduce(Int64(0)) { $0 + ($1.state == .completed ? $1.totalBytes : $1.receivedBytes) }
-        let progress = total > 0 ? min(Double(received) / Double(total), 1) : 0
-        if let first = failed.first {
-            return .init(title: first.title, progress: progress, remaining: failed.count, finished: false, outcome: .failed)
-        }
-        if let first = paused.first {
-            return .init(title: first.title, progress: progress, remaining: paused.count, finished: false, outcome: .paused)
-        }
-        if !members.isEmpty, members.allSatisfy({ $0.state == .completed }) {
-            return .init(title: "缓存完成", progress: 1, remaining: 0, finished: true, outcome: .completed)
-        }
-        return .init(title: "缓存已取消", progress: progress, remaining: 0, finished: false, outcome: .cancelled)
-    }
-
-    // Activity 不是 Sendable：只把 id 和状态交给后台任务，在那边按 id 找回实例再更新 / 结束
-    private nonisolated static func updateActivity(id: String, state: DownloadActivityAttributes.ContentState) {
-        Task.detached {
-            for activity in Activity<DownloadActivityAttributes>.activities where activity.id == id {
-                await activity.update(ActivityContent(state: state, staleDate: nil))
-            }
-        }
-    }
-
-    private nonisolated static func endActivity(id: String, state: DownloadActivityAttributes.ContentState) {
-        Task.detached {
-            for activity in Activity<DownloadActivityAttributes>.activities where activity.id == id {
-                await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(.now.addingTimeInterval(4)))
-            }
-        }
     }
 
     // MARK: 持久化

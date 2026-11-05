@@ -378,8 +378,12 @@ extension View {
             } label: {
                 Label("稍后再看", systemImage: "clock.badge.plus")
             }
-            if !card.bvid.isEmpty, let url = URL(string: "https://www.bilibili.com/video/\(card.bvid)") {
-                ShareLink(item: url) { Label("分享", systemImage: "square.and.arrow.up") }
+            if !card.bvid.isEmpty {
+                Button {
+                    ShareCenter.shared.video(bvid: card.bvid, title: card.title)
+                } label: {
+                    Label("分享", systemImage: "square.and.arrow.up")
+                }
             }
         }
     }

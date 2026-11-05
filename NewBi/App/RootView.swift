@@ -5,6 +5,10 @@ enum Route: Hashable {
     case search
     /// UP 主空间
     case space(mid: Int)
+    /// 空间页直接打开「动态」（我的页 → 动态数）
+    case spaceDynamics(mid: Int)
+    /// 关注 / 粉丝列表
+    case relations(mid: Int, kind: RelationKind)
     case history
     case watchLater
     case downloads
@@ -75,6 +79,10 @@ struct RootView: View {
                         SearchView().navigationTransition(.zoom(sourceID: "search", in: searchTransition))
                     case .space(let mid):
                         SpaceView(mid: mid)
+                    case .spaceDynamics(let mid):
+                        SpaceView(mid: mid, initialTab: .dynamic)
+                    case .relations(let mid, let kind):
+                        RelationListView(mid: mid, kind: kind)
                     case .history:
                         HistoryView()
                     case .watchLater:
@@ -108,6 +116,8 @@ struct RootView: View {
                     path.append(route)
                 })
         }
+        // 自绘分享框：在视频舞台之上，哪里点分享都从这里弹出
+        .overlay { SharePanelLayer() }
         // 正文里的 newbi:// 链接：@ 进空间、BV 号开视频；其它网址交给系统（Safari）
         .environment(\.openURL, OpenURLAction { url in
             switch AppLink.parse(url) {

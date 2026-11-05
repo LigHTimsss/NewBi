@@ -30,7 +30,7 @@ open NewBi.xcodeproj
   - 依赖锁：把某次构建产物里的 `Package.resolved` 放到 `ci/Package.resolved` 提交，之后的构建只用锁住的确切版本（含 KSPlayer 间接带进来的 FFmpeg 二进制包）
 - **GitHub Actions（备用）**：`.github/workflows/build.yml` 只能手动运行（Actions → Build → Run workflow，可选虚拟机），会先编模拟器版查错，再打未签名 ipa（`NewBi-unsigned-ipa` 产物保留 7 天，日志在 `build-logs`）
 
-未签名的 ipa 需要自签后才能装到 iPhone：用 AltStore / SideStore / 爱思助手等工具配合 Apple ID 签名（免费 Apple ID 签的 7 天后过期，需要重签）。注意免费账号不支持部分能力，实况活动、后台下载等可能受限。
+未签名的 ipa 需要自签后才能装到 iPhone：用 AltStore / SideStore / 爱思助手等工具配合 Apple ID 签名（免费 Apple ID 签的 7 天后过期，需要重签）。注意免费账号不支持部分能力，后台下载等可能受限。
 
 > FFmpeg 兜底引擎固定使用 KSPlayer 2.3.4（最后的开源版，GPL-3.0）。5.x 起改为闭源二进制，不含 iOS 真机切片，请勿升级。
 

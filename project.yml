@@ -40,12 +40,10 @@ targets:
   NewBi:
     type: application
     platform: iOS
-    # Shared：与小组件扩展共用的实况活动定义
-    sources: [NewBi, Shared]
+    sources: [NewBi]
     dependencies:
       - package: KSPlayer
         product: KSPlayer
-      - target: NewBiWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.newbi
@@ -66,22 +64,5 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        # 离线缓存进度显示在灵动岛 / 锁屏
-        NSSupportsLiveActivities: true
-
-  # 小组件扩展：目前只有离线缓存的实况活动
-  NewBiWidgets:
-    type: app-extension
-    platform: iOS
-    sources: [NewBiWidgets, Shared]
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.newbi.widgets
-        DEVELOPMENT_TEAM: ""
-        CODE_SIGN_STYLE: Automatic
-    info:
-      path: NewBiWidgets/Info.plist
-      properties:
-        CFBundleDisplayName: NewBi
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        # 我的页「扫一扫」
+        NSCameraUsageDescription: 用于扫一扫识别二维码（打开视频、UP 主空间、链接）

@@ -6,13 +6,17 @@ struct MineView: View {
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
     @AppStorage("appearance") private var appearance = 0
+    @Environment(\.openURL) private var openURL
     @State private var showLogin = false
+    @State private var showScanner = false
+    /// 扫码识别出的视频 / 空间 / 网页：扫码页关掉后再打开（否则会开在扫码页底下）
+    @State private var scanned: URL?
 
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
                 header
-                if session.isLoggedIn { stats }
+                if session.isLoggedIn, let mid = session.mid { stats(mid: mid) }
                 shortcuts
                 moreRows
             }
@@ -22,12 +26,22 @@ struct MineView: View {
         .contentMargins(.bottom, 96, for: .scrollContent)
         .overlay(alignment: .topTrailing) { toolGroup.padding(.trailing, 16) }
         .sheet(isPresented: $showLogin) { LoginView() }
+        .fullScreenCover(isPresented: $showScanner, onDismiss: openScanned) {
+            QRScannerView { scanned = $0 }
+        }
+    }
+
+    private func openScanned() {
+        guard let url = scanned else { return }
+        scanned = nil
+        openURL(url)
     }
 
     private var toolGroup: some View {
         HStack(spacing: 0) {
-            toolButton("viewfinder", "扫一扫") {}
-            toolButton(scheme == .dark ? "moon.fill" : "moon", "深色模式") {
+            toolButton("viewfinder", "扫一扫") { showScanner = true }
+            // 深色时是月亮，浅色时是太阳：图标就是当前的外观
+            toolButton(scheme == .dark ? "moon.fill" : "sun.max.fill", scheme == .dark ? "深色模式，点按切换为浅色" : "浅色模式，点按切换为深色") {
                 withAnimation(Motion.component) { appearance = scheme == .dark ? 1 : 2 }
             }
             NavigationLink(value: Route.settings) {
@@ -54,41 +68,16 @@ struct MineView: View {
     @ViewBuilder
     private var header: some View {
         if let user = session.user, user.isLogin {
-            HStack(spacing: 14) {
-                RemoteImage(url: user.face, size: CGSize(width: 58, height: 58))
-                    .frame(width: 58, height: 58)
-                    .clipShape(.circle)
-                    .padding(4)
-                    .overlay { Circle().stroke(accent, lineWidth: 2) }
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Text(user.uname ?? "").font(.system(size: 20, weight: .bold))
-                        if let level = user.levelInfo?.currentLevel {
-                            Text("LV\(level)")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(accent.accentText(scheme))
-                                .padding(.horizontal, 5)
-                                .frame(height: 16)
-                                .overlay { RoundedRectangle(cornerRadius: 4).stroke(accent.accentText(scheme)) }
-                        }
-                    }
-                    HStack(spacing: 6) {
-                        if user.vipStatus == 1 {
-                            Text("大会员")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 7)
-                                .frame(height: 18)
-                                .background(accent.accentFill, in: .capsule)
-                        }
-                        Text("硬币 \(Int(user.money ?? 0))")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.secondaryText)
-                    }
-                }
-                Spacer()
+            // 点头像、名字这一整块进入自己的空间
+            if let mid = user.mid {
+                NavigationLink(value: Route.space(mid: mid)) { profile(user, linked: true) }
+                    .buttonStyle(PressableStyle())
+                    .foregroundStyle(.primary)
+                    .padding(.top, 8)
+                    .accessibilityHint("进入个人空间")
+            } else {
+                profile(user, linked: false).padding(.top, 8)
             }
-            .padding(.top, 8)
         } else {
             Button { showLogin = true } label: {
                 HStack(spacing: 14) {
@@ -110,23 +99,76 @@ struct MineView: View {
         }
     }
 
-    private var stats: some View {
+    private func profile(_ user: NavInfo, linked: Bool) -> some View {
+        HStack(spacing: 14) {
+            RemoteImage(url: user.face, size: CGSize(width: 58, height: 58))
+                .frame(width: 58, height: 58)
+                .clipShape(.circle)
+                .padding(4)
+                .overlay { Circle().stroke(accent, lineWidth: 2) }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(user.uname ?? "").font(.system(size: 20, weight: .bold))
+                    if let level = user.levelInfo?.currentLevel {
+                        Text("LV\(level)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(accent.accentText(scheme))
+                            .padding(.horizontal, 5)
+                            .frame(height: 16)
+                            .overlay { RoundedRectangle(cornerRadius: 4).stroke(accent.accentText(scheme)) }
+                    }
+                }
+                HStack(spacing: 6) {
+                    if user.vipStatus == 1 {
+                        Text("大会员")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .frame(height: 18)
+                            .background(accent.accentFill, in: .capsule)
+                    }
+                    Text("硬币 \(Int(user.money ?? 0))")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                }
+            }
+            Spacer()
+            if linked {
+                HStack(spacing: 2) {
+                    Text("空间")
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.secondaryText)
+            }
+        }
+        .contentShape(.rect)
+    }
+
+    /// 动态 → 自己空间的「动态」；关注 / 粉丝 → 列表
+    private func stats(mid: Int) -> some View {
         HStack {
-            stat(session.stat?.dynamicCount, "动态")
-            stat(session.stat?.following, "关注")
-            stat(session.stat?.follower, "粉丝")
+            stat(session.stat?.dynamicCount, "动态", route: .spaceDynamics(mid: mid))
+            stat(session.stat?.following, "关注", route: .relations(mid: mid, kind: .followings))
+            stat(session.stat?.follower, "粉丝", route: .relations(mid: mid, kind: .followers))
         }
     }
 
-    private func stat(_ value: Int?, _ title: String) -> some View {
-        VStack(spacing: 2) {
-            // 不挂数字滚动效果：数据刷新本来就不带动画，这个效果从没显示过；
-            // 挂着时低电量模式下切到「我的」整页平移会明显掉帧（真机逐项排查确认）
-            Text(value?.biliCount ?? "-")
-                .font(.system(size: 19, weight: .bold))
-            Text(title).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+    private func stat(_ value: Int?, _ title: String, route: Route) -> some View {
+        NavigationLink(value: route) {
+            VStack(spacing: 2) {
+                // 不挂数字滚动效果：数据刷新本来就不带动画，这个效果从没显示过；
+                // 挂着时低电量模式下切到「我的」整页平移会明显掉帧（真机逐项排查确认）
+                Text(value?.biliCount ?? "-")
+                    .font(.system(size: 19, weight: .bold))
+                Text(title).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .contentShape(.rect)
         }
-        .frame(maxWidth: .infinity)
+        .buttonStyle(PressableStyle())
+        .foregroundStyle(.primary)
     }
 
     private var shortcuts: some View {

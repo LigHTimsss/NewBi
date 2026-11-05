@@ -19,6 +19,8 @@ struct PlayerDrawer: View {
                 case .speed: SpeedPanel(controller: controller, onClose: onClose)
                 case .more: MorePanel(controller: controller)
                 case .parts: PartsPanel(model: model)
+                // 评论有自己的浮窗（FullscreenOverlay 里的 CommentsPanel），不走抽屉
+                case .comments: EmptyView()
                 }
             }
             .padding(.leading, 22)

@@ -70,7 +70,7 @@ struct CoinSheet: View {
             VStack(spacing: 10) {
                 HStack(spacing: -10) {
                     ForEach(0..<n, id: \.self) { index in
-                        Image(systemName: "bitcoinsign.circle.fill")
+                        Image(systemName: "b.circle.fill")
                             .font(.system(size: 44))
                             .foregroundStyle(on ? accent.accentText(scheme) : Theme.secondaryText)
                             // 选中时翻转一圈；确认后往下落

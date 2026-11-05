@@ -145,8 +145,10 @@ struct SpaceView: View {
     @State private var toast: String?
     @Environment(\.dismiss) private var dismiss
 
-    init(mid: Int) {
+    /// - Parameter initialTab: 一进来就停在哪个 Tab（我的页点「动态」时直接看动态）
+    init(mid: Int, initialTab: SpaceModel.Tab = .home) {
         _model = State(initialValue: SpaceModel(mid: mid))
+        _tab = State(initialValue: initialTab)
     }
 
     /// 顶栏底边（全局坐标）：Tab 栏滚到这里就吸顶
@@ -207,7 +209,12 @@ struct SpaceView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
                 Spacer(minLength: 0)
-                ShareLink(item: URL(string: "https://space.bilibili.com/\(model.mid)")!) {
+                Button {
+                    if let url = URL(string: "https://space.bilibili.com/\(model.mid)") {
+                        let name = model.profile?.card.name ?? ""
+                        ShareCenter.shared.share(title: name.isEmpty ? "UP 主空间" : "\(name)的个人空间", url: url)
+                    }
+                } label: {
                     Image(systemName: "square.and.arrow.up")
                         .font(.system(size: 17, weight: .medium))
                         .frame(width: 40, height: 40)

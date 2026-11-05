@@ -55,6 +55,10 @@ extension Endpoint {
     static func view(bvid: String) -> Endpoint {
         Endpoint(path: "/x/web-interface/view", query: ["bvid": bvid])
     }
+    /// 只有 av 号时（扫到旧链接）用来查 BV 号
+    static func view(aid: Int) -> Endpoint {
+        Endpoint(path: "/x/web-interface/view", query: ["aid": "\(aid)"])
+    }
 
     static func related(bvid: String) -> Endpoint {
         Endpoint(path: "/x/web-interface/archive/related", query: ["bvid": bvid])
@@ -263,6 +267,15 @@ extension Endpoint {
 
     /// 关注 / 取消关注（POST，act 1 关注 · 2 取消）
     static let relationModify = Endpoint(path: "/x/relation/modify")
+
+    /// 关注列表（按关注时间倒序，每页 50）
+    static func followings(mid: Int, page: Int) -> Endpoint {
+        Endpoint(path: "/x/relation/followings", query: ["vmid": "\(mid)", "pn": "\(page)", "ps": "50", "order": "desc"])
+    }
+    /// 粉丝列表（按关注时间倒序，每页 50）
+    static func followers(mid: Int, page: Int) -> Endpoint {
+        Endpoint(path: "/x/relation/followers", query: ["vmid": "\(mid)", "pn": "\(page)", "ps": "50", "order": "desc"])
+    }
 
     /// 空间投稿接口校验浏览器指纹参数，缺少时常见 -352
     private static let riskParams: [String: String] = [

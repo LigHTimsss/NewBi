@@ -43,7 +43,7 @@
 - [x] 视频详情：UP 主、三连统计、相关推荐
 - [x] 播放：MP4 直链、进度拖动、双击暂停、弹幕开关
 - [x] 弹幕：分段懒加载、滚动/顶部/底部轨道、屏蔽规则
-- [x] 横屏全屏播放器：手势、锁屏、右侧玻璃抽屉（弹幕设置 / 画质 / 倍速 / 更多）、发弹幕
+- [x] 横屏全屏播放器：手势、锁屏、右侧玻璃抽屉（弹幕设置 / 画质 / 倍速 / 更多）、右侧评论浮窗（不退出全屏）、发弹幕
 - [x] 画中画、后台播放开关、定时关闭、投屏（AirPlay）
 - [x] 搜索：历史、热搜、联想词、视频 / UP 主结果、排序、关键词高亮
 - [x] 评论：热度 / 时间排序、置顶、表情图文混排、楼中楼、点赞、发评论与回复
@@ -51,7 +51,7 @@
 - [x] 历史记录：按日期分组、观看进度、设备图标、左滑删除、清空；跨设备续播与进度上报
 - [x] 收藏：收藏夹网格、收藏夹详情（三种排序、失效视频、长按取消收藏）、详情页「收藏到…」多选
 - [x] 稍后再看：列表（进度、左滑删除、移除已看完、清空、开始播放）；首页 / 搜索 / 相关推荐 / 空间长按卡片添加，详情「更多」添加
-- [x] 离线缓存：后台下载、断点续传、地址过期自动换、本地播放（含弹幕）、灵动岛进度、断网可看
+- [x] 离线缓存：后台下载、断点续传、地址过期自动换、本地播放（含弹幕）、断网可看
 - [x] 控制中心 / 锁屏的播放信息与远程控制（播放暂停、±10 秒、拖动、倍速、上一 P / 下一 P）
 - [x] 多 P：选集（横向胶囊 / 展开网格）、续播回到上次那一 P、播完自动连播、缓存当前 P
 
@@ -62,6 +62,8 @@
 - [x] 零散项：评论 @ / 链接 / 时间点、收藏夹增删改、空间页动态 / 合集 / 收藏、稍后再看与合集连播、全屏选集
 - [x] 消息中心：回复我的 / @我 / 收到的赞 / 系统通知、私信会话与聊天（收发文字、图片 / 卡片显示、撤回）、首页信封未读角标
 - [x] 首页左上角显示登录用户头像
+- [x] 我的页：点头像进个人空间、动态 / 关注 / 粉丝（关注列表、粉丝列表可就地关注 / 回关 / 取关）、扫一扫、深浅色切换按钮（月亮 / 太阳）
+- [x] 自绘分享框：微信、QQ、复制链接、系统分享
 - [x] 视频页简介 / 评论左右滑动切换，加载过不再重新淡入
 - [x] 连贯过渡：卡片封面展开成视频页、返回收回卡片；播放中返回整页连续收成迷你胶囊，胶囊展开铺满屏幕的同时变成视频页；侧滑 / 下拉跟手
 - [x] 迷你播放条：播放中返回自动缩小、点 / 上滑展开不断播、横滑关闭（设计稿资料库页底部）
@@ -353,7 +355,7 @@ seg.so ──▶ 手写 Protobuf 解析（后台线程）──▶ 按时间排�
   - 图文：1 张按原比例；2、4 张两列；其余三列正方形
   - 转发：原动态放在浅底卡片里，「@原作者」可点
   - 专栏：标题 + 摘要 + 封面
-- 底部：转发数、评论（弹出评论面板，与视频评论同一套组件，按动态自带的评论区类型 11 / 17 / 1 加载）、点赞（乐观更新 + 轻触反馈）
+- 底部：转发（打开分享框）、评论（弹出评论面板，与视频评论同一套组件，按动态自带的评论区类型 11 / 17 / 1 加载）、点赞（乐观更新 + 轻触反馈）
 - **大图查看**：全屏、左右翻页、双指 / 双击缩放、下滑关闭；评论里的图片也接上了
 - **底栏红点**：读到第一页时记下 `update_baseline`；App 回到前台时请求一次新动态数，有新动态就在「动态」图标上显示强调色小圆点。切到动态页、或在动态页再点一次「动态」会刷新并清除红点。不轮询，开销只有回到前台时的一次请求
 
@@ -361,7 +363,7 @@ seg.so ──▶ 手写 Protobuf 解析（后台线程）──▶ 按时间排�
 - **缓存什么**：DASH 的视频、音频两路各存成完整的 fMP4 文件，外加封面和全部弹幕分段。播放时本地服务按 sidx 生成 HLS，分段直接从文件按 Range 读取——与在线播放同一套逻辑，两个引擎都能播，HDR / 杜比视界照常
 - **下载**：后台 URLSession，App 退到后台、被挂起甚至被杀掉后系统继续下载，完成后唤醒 App 收尾；同时最多 2 个视频；暂停保存续传数据，继续时断点续传；默认仅 Wi-Fi（设置里可关）
 - **地址过期**：下载返回 403 / 404 / 410 时，按同画质同编码重新取流，从头下载这一路
-- **进度**：灵动岛紧凑视图显示图标 + 百分比，展开后是标题、进度条、剩余个数；锁屏横幅同样；最多每秒刷新一次。实况活动在小组件扩展 `NewBiWidgets` 里，与 App 共用 `Shared/DownloadActivity.swift`
+- **进度**：只在「离线缓存 → 缓存中」里显示（已去掉灵动岛 / 锁屏的实况活动和小组件扩展）
 - **播放**：打开已缓存的视频时优先播本地文件；断网时详情接口失败也能播，页面显示「离线播放 · 画质」和缓存时记下的标题
 - **页面**：「已缓存 / 缓存中」玻璃分段；缓存中的行显示进度条、已下 / 总大小，右侧暂停 / 继续 / 重试；左滑删除（二次确认）；右上角全部暂停 / 全部开始；底部显示已缓存占用和手机剩余空间
 - 缓存文件放在 Application Support/Downloads，不进 iCloud 备份
@@ -372,7 +374,18 @@ seg.so ──▶ 手写 Protobuf 解析（后台线程）──▶ 按时间排�
 - 点赞乐观更新，失败回滚；计数显示为「详情统计 + 本页变化量」，不用重新拉详情
 - 投币面板：1 枚 / 2 枚两张玻璃卡片，选中的硬币沿 Y 轴翻转一圈；可勾选同时点赞；底部显示硬币余额；确认后硬币下落、成功触感，余额随即刷新。已投 1 枚时只能再投 1 枚，投满 2 枚后点按钮直接提示
 - 长按点赞 1.2 秒：点赞、投币、收藏三个图标外圈同时走一圈强调色光环，走满即一键三连；结果按项提示（如硬币不足时「已点赞，已收藏，硬币不足或已投满」）
-- 分享改为系统分享面板（视频链接）
+- 分享：自绘分享框（见「我的页 · 扫码 · 分享」）
+- 投币图标是圆圈里的字母 B（SF Symbols `b.circle`），不用比特币符号
+
+**我的页 · 扫码 · 分享**
+- 头像和名字这一整块点进自己的空间；动态数 → 自己空间的「动态」Tab；关注 / 粉丝 → 列表（每页 50，下拉刷新、滚到底加载），右侧按钮就地「关注 / 回关 / 已关注 / 互相关注」，取关二次确认，返回时刷新数字
+- 右上角深浅色按钮：深色时是月亮、浅色时是太阳，点按切换
+- 扫一扫：系统 DataScanner 实时识别二维码，也可从相册选图识别，带手电筒
+  - B 站视频（BV / av / b23.tv 短链）、个人空间：关掉扫码页后直接打开
+  - 网页 / 电视的登录码：不代为确认登录（等于替别的设备授权账号），提示用官方 App 扫
+  - 其它网址、文字：显示内容，给「在浏览器打开 / 复制」，不自动跳转（防钓鱼）
+- 分享框（视频页操作行、播放器「更多」、卡片长按、空间页、动态「转发」共用）：微信、QQ、复制链接、系统分享。没有接微信 / QQ 官方 SDK（要在开放平台注册应用），所以是先把「【标题】链接」放进剪贴板，再打开对应 App 粘贴发送
+- 全屏播放时点「评论」：右侧滑出评论浮窗，视频不停；和竖屏「评论」Tab 是同一份数据
 
 **多 P**
 - 简介里「选集 当前 / 总数」：默认横向胶囊，当前 P 带跳动的波形图标并自动滚到中间；「全部」展开成两列网格
@@ -482,11 +495,11 @@ NewBi/
 ├── docs/DESIGN.md
 └── NewBi/
     ├── App/            NewBiApp.swift · RootView.swift · Orientation.swift
-    ├── DesignSystem/   Theme.swift · GlassComponents.swift · RemoteImage.swift · RichText.swift · ImageViewer.swift
+    ├── DesignSystem/   Theme.swift · GlassComponents.swift · RemoteImage.swift · RichText.swift · ImageViewer.swift · SharePanel.swift（分享框）
     ├── Core/
     │   ├── Network/    BiliClient.swift · Endpoint.swift · WBISigner.swift · NetworkStatus.swift
     │   ├── Media/      LocalMediaServer.swift（127.0.0.1 媒体代理，含本地文件）
-    │   ├── Downloads/  DownloadManager.swift（后台下载 + 实况活动）· DownloadRecord.swift
+    │   ├── Downloads/  DownloadManager.swift（后台下载）· DownloadRecord.swift
     │   ├── Models/     Video.swift · Search.swift · Comment.swift · Space.swift · Library.swift · Dynamic.swift
     │   └── Auth/       QRLoginModel.swift · Credentials.swift（Keychain、Cookie 刷新）
     └── Features/
@@ -497,9 +510,9 @@ NewBi/
         ├── Search/     SearchView.swift（含 SearchModel）
         ├── Dynamic/    DynamicView.swift（含 DynamicModel、红点 DynamicBadge）
         ├── Comments/   CommentModel.swift · CommentViews.swift
-        ├── Space/      SpaceView.swift（含 SpaceModel）· RelationModel.swift（含 FollowButton）
+        ├── Space/      SpaceView.swift（含 SpaceModel）· RelationModel.swift（含 FollowButton）· RelationListView.swift（关注 / 粉丝列表）
         ├── Library/    HistoryView.swift · WatchLaterView.swift · FavoritesView.swift（含收藏夹详情）· FavoriteSheet.swift · DownloadsView.swift（含缓存画质面板）
-        ├── Mine/       MineView.swift（含 LoginView）
+        ├── Mine/       MineView.swift（含 LoginView）· QRScanner.swift（扫一扫）
         └── Settings/   SettingsView.swift
 ```
 

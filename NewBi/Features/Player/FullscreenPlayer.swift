@@ -2,6 +2,8 @@ import SwiftUI
 
 enum PlayerPanel: Hashable {
     case danmaku, quality, speed, more, parts
+    /// 评论：右侧浮起的小窗，不退出全屏
+    case comments
 }
 
 enum GestureHUD: Equatable {
@@ -26,8 +28,6 @@ struct FullscreenOverlay: View {
     let model: VideoDetailModel
     @Binding var locked: Bool
     var onExit: () -> Void
-    /// 评论：退出全屏、切到评论 Tab
-    var onComments: () -> Void
     var onFavorite: () -> Void
 
     @State private var showControls = true
@@ -85,7 +85,11 @@ struct FullscreenOverlay: View {
                         .contentShape(.rect)
                         .onTapGesture { self.panel = nil }
                         .accessibilityLabel("关闭面板")
-                    PlayerDrawer(panel: panel, controller: player, model: model) { self.panel = nil }
+                    if panel == .comments {
+                        CommentsPanel(model: model.comments) { self.panel = nil }
+                    } else {
+                        PlayerDrawer(panel: panel, controller: player, model: model) { self.panel = nil }
+                    }
                 }
                 .transition(.move(edge: .trailing))
             }
@@ -235,7 +239,7 @@ struct FullscreenOverlay: View {
                 ) {
                     Task { try? await model.toggleLike() }
                 }
-                iconButton("text.bubble", "评论", count: stat?.reply, action: onComments)
+                iconButton("text.bubble", "评论", count: model.comments.total ?? stat?.reply) { panel = .comments }
                 iconButton(model.isFavoured ? "star.fill" : "star", "收藏",
                            count: (stat?.favorite ?? 0) + model.favDelta, tint: model.isFavoured ? accent : nil,
                            action: onFavorite)
@@ -391,6 +395,32 @@ struct FullscreenOverlay: View {
 }
 
 // MARK: - 进度条：已播 / 已缓冲 / 呼吸光点
+
+// MARK: - 评论浮窗
+
+/// 全屏时看评论：从右侧滑出的浮窗，视频照常播放；和竖屏「评论」Tab 是同一份评论数据（已加载的不重复请求）
+private struct CommentsPanel: View {
+    let model: CommentModel
+    var onClose: () -> Void
+
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 26, style: .continuous) }
+
+    var body: some View {
+        // 浮窗里没有导航栈：点头像不跳空间
+        CommentSection(model: model, linksToSpace: false, onClose: onClose)
+            .frame(width: 400)
+            .frame(maxHeight: .infinity)
+            .background {
+                // 大面积用 Material，比 glassEffect 便宜；和右侧抽屉同一个压暗色
+                shape.fill(.ultraThinMaterial)
+                    .overlay(shape.fill(Color(red: 14 / 255, green: 14 / 255, blue: 18 / 255).opacity(0.55)))
+                    .overlay(shape.strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+            }
+            .clipShape(shape)
+            .padding(.vertical, 12)
+            .padding(.trailing, 12)
+    }
+}
 
 private struct FullscreenProgress: View {
     let controller: PlayerController

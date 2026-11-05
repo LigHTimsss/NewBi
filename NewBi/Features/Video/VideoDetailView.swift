@@ -276,9 +276,6 @@ struct VideoDetailView: View {
     /// 在画面上下拉收起：只认从画面里（进度条以上）开始的竖向拖动
     @State private var pulling: Bool?
     @State private var playerBox = FrameBox()
-    /// 「点我发弹幕」的输入框
-    @State private var composing = false
-    @State private var draft = ""
     /// 全屏里点收藏：收藏夹面板挂在这一层（简介区在全屏时是收起的）
     @State private var showFavorite = false
     @Environment(SessionStore.self) private var session
@@ -297,8 +294,7 @@ struct VideoDetailView: View {
                     DetailTabs(
                         selection: tab,
                         progress: pageProgress,
-                        replyCount: model.comments.total ?? model.detail?.stat.reply,
-                        onCompose: startComposing
+                        replyCount: model.comments.total ?? model.detail?.stat.reply
                     ) { index in
                         withAnimation(Motion.component) { tab = index }
                     }
@@ -328,13 +324,6 @@ struct VideoDetailView: View {
             }
         }
         .toast(Binding(get: { model.resumeHint }, set: { model.resumeHint = $0 }), bottomPadding: 40)
-        .alert("发弹幕", isPresented: $composing) {
-            TextField("发一条友善的弹幕", text: $draft)
-            Button("发送", action: sendDraft)
-            Button("取消", role: .cancel) { draft = "" }
-        } message: {
-            Text("弹幕会出现在当前播放位置")
-        }
         .sheet(isPresented: $showFavorite) {
             if let detail = model.detail, let mid = session.user?.mid {
                 FavoriteSheet(aid: detail.aid, mid: mid) { favoured in
@@ -382,17 +371,14 @@ struct VideoDetailView: View {
                         model: model,
                         locked: $locked,
                         onExit: { setFullscreen(false) },
-                        // 评论：退出全屏、切到评论 Tab
-                        onComments: {
-                            setFullscreen(false)
-                            withAnimation(Motion.component) { tab = 1 }
-                        },
                         onFavorite: requestFavorite
                     )
                 } else {
                     CompactOverlay(
                         controller: model.player,
                         card: model.card,
+                        // 从链接打开时卡片里没有标题，用详情里的
+                        shareTitle: model.detail?.title ?? model.card.title,
                         onBack: { VideoStage.shared.back() },
                         onFullscreen: { setFullscreen(true) }
                     )
@@ -448,33 +434,6 @@ struct VideoDetailView: View {
         model.player.onEnded = { [weak model] in
             guard let model, let next = PlayQueue.shared.next(after: bvid) else { return }
             withAnimation(Motion.component) { model.upNext = next }
-        }
-    }
-
-    private func startComposing() {
-        guard session.isLoggedIn else {
-            model.resumeHint = "登录后才能发送弹幕"
-            return
-        }
-        guard model.player.playingCid != nil else {
-            model.resumeHint = "视频开始播放后才能发弹幕"
-            return
-        }
-        composing = true
-    }
-
-    private func sendDraft() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft = ""
-        guard !text.isEmpty else { return }
-        let model = model
-        Task {
-            do {
-                try await model.player.sendDanmaku(text)
-                model.resumeHint = "发送成功"
-            } catch {
-                model.resumeHint = error.localizedDescription
-            }
         }
     }
 
@@ -574,6 +533,7 @@ private struct PlayerStatusView: View {
 private struct CompactOverlay: View {
     let controller: PlayerController
     let card: VideoCard
+    var shareTitle: String
     var onBack: () -> Void
     var onFullscreen: () -> Void
     @State private var showControls = true
@@ -639,8 +599,12 @@ private struct CompactOverlay: View {
             } label: {
                 Label("稍后再看", systemImage: "clock.badge.plus")
             }
-            if let url = URL(string: "https://www.bilibili.com/video/\(card.bvid)") {
-                ShareLink(item: url) { Label("分享", systemImage: "square.and.arrow.up") }
+            if !card.bvid.isEmpty {
+                Button {
+                    ShareCenter.shared.video(bvid: card.bvid, title: shareTitle)
+                } label: {
+                    Label("分享", systemImage: "square.and.arrow.up")
+                }
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -777,7 +741,6 @@ private struct DetailTabs: View {
     var selection: Int
     var progress: CGFloat
     var replyCount: Int?
-    var onCompose: () -> Void
     var onSelect: (Int) -> Void
     /// 两个标签下划线槽位的中心（在本视图坐标系中）
     @State private var slots: [Int: CGPoint] = [:]
@@ -789,21 +752,6 @@ private struct DetailTabs: View {
             tab("简介", index: 0)
             tab("评论", index: 1, badge: replyCount?.biliCount)
             Spacer()
-            Button(action: onCompose) {
-                HStack(spacing: 6) {
-                    Text("点我发弹幕").foregroundStyle(Theme.secondaryText)
-                    Text("弹")
-                        .font(.system(size: 11, weight: .bold))
-                        .frame(width: 22, height: 22)
-                        .background(Theme.selection, in: .circle)
-                }
-                .font(.system(size: 13))
-                .padding(.leading, 12)
-                .padding(.trailing, 5)
-                .frame(height: 32)
-            }
-            .buttonStyle(PressableStyle())
-            .glassEffect(.regular.interactive(), in: .capsule)
         }
         .coordinateSpace(.named(Self.space))
         .overlay(alignment: .topLeading) { indicator }
@@ -995,7 +943,7 @@ private struct IntroSection: View {
     private func actions(_ stat: VideoStat) -> some View {
         HStack {
             likeAction(stat)
-            action(model.coins > 0 ? "bitcoinsign.circle.fill" : "bitcoinsign.circle", ((stat.coin ?? 0) + model.coinDelta).biliCount,
+            action(model.coins > 0 ? "b.circle.fill" : "b.circle", ((stat.coin ?? 0) + model.coinDelta).biliCount,
                    on: model.coins > 0, charge: charging) {
                 if !session.isLoggedIn {
                     toast = "登录后才能投币"
@@ -1010,9 +958,14 @@ private struct IntroSection: View {
                 if session.isLoggedIn { showFavorite = true } else { toast = "登录后才能收藏" }
             }
             cacheAction
-            if let detail = model.detail, let url = URL(string: "https://www.bilibili.com/video/\(detail.bvid)") {
-                ShareLink(item: url) { actionLabel("arrowshape.turn.up.right", (stat.share ?? 0).biliCount, on: false, charge: false) }
-                    .buttonStyle(PressableStyle())
+            if let detail = model.detail {
+                Button {
+                    ShareCenter.shared.video(bvid: detail.bvid, title: detail.title)
+                } label: {
+                    actionLabel("arrowshape.turn.up.right", (stat.share ?? 0).biliCount, on: false, charge: false)
+                }
+                .buttonStyle(PressableStyle())
+                .accessibilityLabel("分享")
             }
         }
         .sensoryFeedback(.impact(weight: .light), trigger: model.isLiked)

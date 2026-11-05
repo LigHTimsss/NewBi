@@ -422,7 +422,7 @@ struct DynamicCard: View {
     private var stats: some View {
         let liked = model.isLiked(item)
         return HStack {
-            statButton("arrowshape.turn.up.right", item.modules.stat?.forward?.count, label: "转发") {}
+            statButton("arrowshape.turn.up.right", item.modules.stat?.forward?.count, label: "转发") { share() }
             statButton("bubble.left", item.modules.stat?.comment?.count, label: "评论", action: onComment)
             statButton(liked ? "hand.thumbsup.fill" : "hand.thumbsup", model.likeCount(item), label: liked ? "取消点赞" : "点赞", on: liked) {
                 Task {
@@ -433,6 +433,16 @@ struct DynamicCard: View {
         }
         .font(.system(size: 13))
         .animation(Motion.component, value: liked)
+    }
+
+    /// 转发：打开分享框（动态链接 t.bilibili.com/<id>），标题用「谁的动态」+ 正文开头
+    private func share() {
+        guard let url = URL(string: "https://t.bilibili.com/\(item.id)") else { return }
+        let name = item.modules.author?.name ?? ""
+        let text = item.modules.dynamic?.title ?? item.modules.dynamic?.text?.text ?? ""
+        let summary = String(text.replacingOccurrences(of: "\n", with: " ").prefix(30))
+        let title = [name.isEmpty ? "动态" : "\(name)的动态", summary].filter { !$0.isEmpty }.joined(separator: "：")
+        ShareCenter.shared.share(title: title, url: url)
     }
 
     private func statButton(_ icon: String, _ count: Int?, label: String, on: Bool = false, action: @escaping () -> Void) -> some View {
