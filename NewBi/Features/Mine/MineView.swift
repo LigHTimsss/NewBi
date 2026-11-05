@@ -38,7 +38,7 @@ struct MineView: View {
         .font(.system(size: 18))
         .foregroundStyle(.primary)
         .padding(.horizontal, 2)
-        .glassEffect(.regular.interactive(), in: .capsule)
+        .diagnosticGlass(Diagnostics.mineNoGlass, in: .capsule)
     }
 
     private func toolButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
