@@ -42,8 +42,8 @@ final class SearchModel {
     private var loading: Set<Kind> = []
     private var errors: [Kind: String] = [:]
 
-    var isLoading: Bool { loading.contains(kind) }
-    var error: String? { errors[kind] }
+    func isLoading(_ kind: Kind) -> Bool { loading.contains(kind) }
+    func error(for kind: Kind) -> String? { errors[kind] }
 
     var phase: Phase {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
@@ -51,7 +51,7 @@ final class SearchModel {
         return trimmed == submitted ? .results : .suggesting
     }
 
-    var hasMore: Bool { (pages[kind]?.next ?? 1) <= (pages[kind]?.total ?? 1) }
+    func hasMore(_ kind: Kind) -> Bool { (pages[kind]?.next ?? 1) <= (pages[kind]?.total ?? 1) }
 
     /// 每种结果各自的分页：下一页页码、总页数
     @ObservationIgnored private var pages: [Kind: (next: Int, total: Int)] = [:]
@@ -117,20 +117,21 @@ final class SearchModel {
         startLoad(kind, reset: true)
     }
 
-    func loadMore(after id: Int) {
+    func loadMore(after id: Int, in kind: Kind) {
+        guard self.kind == kind else { return }
         let lastID = kind == .video ? videos.last?.id : users.last?.id
         guard id == lastID else { return }
         startLoad(kind, reset: false)
     }
 
-    var isEmpty: Bool { kind == .video ? videos.isEmpty : users.isEmpty }
+    func isEmpty(_ kind: Kind) -> Bool { kind == .video ? videos.isEmpty : users.isEmpty }
 
-    func retry() {
+    func retry(_ kind: Kind) {
         startLoad(kind, reset: true)
     }
 
     /// 下拉刷新当前分类
-    func refresh() async {
+    func refresh(_ kind: Kind) async {
         startLoad(kind, reset: true)
         await loadTasks[kind]?.value
     }
@@ -382,43 +383,53 @@ private struct SearchResults: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12, pinnedViews: .sectionHeaders) {
-                Section {
-                    switch model.kind {
-                    case .video:
-                        ForEach(Array(model.videos.enumerated()), id: \.element.id) { index, video in
-                            VideoLink(card: video.card) {
-                                VideoRow(
-                                    card: video.card,
-                                    attributedTitle: BiliHTML.highlighted(video.titleHTML, color: accent.accentText(scheme)),
-                                    subtitle: "\(video.author) · \(video.play.biliCount)播放"
-                                )
-                            }
-                            .buttonStyle(PressableStyle())
-                            .watchLaterMenu(video.card)
-                            .onAppear { model.loadMore(after: video.id) }
-                        }
-                    case .user:
-                        ForEach(Array(model.users.enumerated()), id: \.element.id) { index, user in
-                            NavigationLink(value: Route.space(mid: user.mid)) { UserRow(user: user) }
-                                .buttonStyle(PressableStyle())
-                                .foregroundStyle(.primary)
-                                .onAppear { model.loadMore(after: user.id) }
-                        }
-                    }
-                    footer
-                } header: {
-                    header(search: model)
+        @Bindable var search = model
+        VStack(spacing: 0) {
+            header(search: model)
+                .padding(.horizontal, 16)
+            TabView(selection: $search.kind) {
+                ForEach(SearchModel.Kind.allCases, id: \.self) { kind in
+                    page(kind).tag(kind)
                 }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+        }
+        .transition(.opacity)
+    }
+
+    private func page(_ kind: SearchModel.Kind) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                switch kind {
+                case .video:
+                    ForEach(Array(model.videos.enumerated()), id: \.element.id) { index, video in
+                        VideoLink(card: video.card) {
+                            VideoRow(
+                                card: video.card,
+                                attributedTitle: BiliHTML.highlighted(video.titleHTML, color: accent.accentText(scheme)),
+                                subtitle: "\(video.author) · \(video.play.biliCount)播放"
+                            )
+                        }
+                        .buttonStyle(PressableStyle())
+                        .watchLaterMenu(video.card)
+                        .onAppear { model.loadMore(after: video.id, in: .video) }
+                    }
+                case .user:
+                    ForEach(Array(model.users.enumerated()), id: \.element.id) { index, user in
+                        NavigationLink(value: Route.space(mid: user.mid)) { UserRow(user: user) }
+                            .buttonStyle(PressableStyle())
+                            .foregroundStyle(.primary)
+                            .onAppear { model.loadMore(after: user.id, in: .user) }
+                    }
+                }
+                footer(for: kind)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 32)
         }
         .scrollDismissesKeyboard(.immediately)
         // 下拉只刷新结果（不再触发返回）
-        .refreshable { await model.refresh() }
-        .transition(.opacity)
+        .refreshable { await model.refresh(kind) }
     }
 
     private func header(search: SearchModel) -> some View {
@@ -454,21 +465,21 @@ private struct SearchResults: View {
     }
 
     @ViewBuilder
-    private var footer: some View {
-        let isEmpty = model.isEmpty
-        if model.isLoading {
+    private func footer(for kind: SearchModel.Kind) -> some View {
+        let isEmpty = model.isEmpty(kind)
+        if model.isLoading(kind) {
             ProgressView().frame(maxWidth: .infinity).padding()
-        } else if let error = model.error {
+        } else if let error = model.error(for: kind) {
             ContentUnavailableView {
                 Label("搜索失败", systemImage: "wifi.exclamationmark")
             } description: {
                 Text(error)
             } actions: {
-                Button("重试") { model.retry() }.buttonStyle(.glass)
+                Button("重试") { model.retry(kind) }.buttonStyle(.glass)
             }
         } else if isEmpty {
             ContentUnavailableView.search(text: model.submitted ?? "")
-        } else if !model.hasMore {
+        } else if !model.hasMore(kind) {
             Text("没有更多了")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondaryText)

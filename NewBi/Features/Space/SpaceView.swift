@@ -216,7 +216,7 @@ struct SpaceView: View {
                         // 左右滑切到相邻的 Tab：往左滑是下一个，往右滑是上一个，内容跟着从对应一侧推进来
                         .transition(.push(from: swipeForward ? .trailing : .leading))
                         .contentShape(.rect)
-                        .simultaneousGesture(tabSwipe)
+                        .highPriorityGesture(SpaceTabPan(onSwipe: switchTab))
                 }
                 .padding(.bottom, 40)
             }
@@ -473,20 +473,14 @@ struct SpaceView: View {
         .padding(.horizontal, 12)
     }
 
-    /// 明显的横向滑动才切换（竖向照常滚动页面）；从左边缘开始的留给侧滑返回
-    private var tabSwipe: some Gesture {
-        DragGesture(minimumDistance: 24)
-            .onEnded { value in
-                let dx = value.translation.width, dy = value.translation.height
-                guard abs(dx) > 70, abs(dx) > abs(dy) * 1.6, value.startLocation.x > 30 else { return }
-                let tabs = SpaceModel.Tab.allCases
-                guard let current = tabs.firstIndex(of: tab) else { return }
-                let next = dx < 0 ? current + 1 : current - 1
-                guard tabs.indices.contains(next) else { return }
-                swipeForward = dx < 0
-                searchFocused = false
-                withAnimation(Motion.tab) { tab = tabs[next] }
-            }
+    private func switchTab(forward: Bool) {
+        let tabs = SpaceModel.Tab.allCases
+        guard let current = tabs.firstIndex(of: tab) else { return }
+        let next = forward ? current + 1 : current - 1
+        guard tabs.indices.contains(next) else { return }
+        swipeForward = forward
+        searchFocused = false
+        withAnimation(Motion.tab) { tab = tabs[next] }
     }
 
     @ViewBuilder
@@ -502,6 +496,53 @@ struct SpaceView: View {
 }
 
 // MARK: - 头图：下拉放大、上滑视差
+
+/// 一旦认出横拖就取消卡片按压；松手时再决定是否翻页。
+private struct SpaceTabPan: UIGestureRecognizerRepresentable {
+    let onSwipe: (Bool) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.maximumNumberOfTouches = 1
+        pan.cancelsTouchesInView = true
+        pan.delegate = context.coordinator
+        return pan
+    }
+
+    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
+        guard pan.state == .ended else { return }
+        let delta = pan.translation(in: pan.view)
+        guard abs(delta.x) > 70, abs(delta.x) > abs(delta.y) * 1.6 else { return }
+        onSwipe(delta.x < 0)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard touch.location(in: touch.window).x > 30 else { return false }
+            // 横向内容区域自己处理拖动，包括滚到首尾时的回弹。
+            var view = touch.view
+            while let current = view {
+                if let scroll = current as? UIScrollView, scroll.isScrollEnabled,
+                   scroll.alwaysBounceHorizontal ||
+                    scroll.contentSize.width + scroll.adjustedContentInset.left + scroll.adjustedContentInset.right > scroll.bounds.width + 1 {
+                    return false
+                }
+                if current === gestureRecognizer.view { break }
+                view = current.superview
+            }
+            return true
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = pan.velocity(in: pan.view)
+            return abs(velocity.x) > abs(velocity.y) * 1.6
+        }
+    }
+}
 
 private struct SpaceBanner: View {
     let url: String?
