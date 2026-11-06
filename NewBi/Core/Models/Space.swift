@@ -125,7 +125,7 @@ struct SpaceVideo: Decodable, Identifiable, Sendable {
     }
 }
 
-/// /x/space/wbi/acc/info：名片接口没有的 UID 展示信息、勋章、IP 属地。字段都可能缺，全按可选解
+/// /x/space/wbi/acc/info：名片接口没有的勋章信息（网页接口不返回 IP 属地，2026-11 实测）。字段都可能缺，全按可选解
 struct SpaceAccInfo: Decodable, Sendable {
     /// 成就勋章（勋章墙里展示的那一枚）
     struct Nameplate: Decodable, Sendable {
@@ -163,24 +163,15 @@ struct SpaceAccInfo: Decodable, Sendable {
     let mid: Int?
     let nameplate: Nameplate?
     let fansMedal: FansMedal?
-    /// 「IP属地：广东」；接口不一定给
-    let ipLocation: String?
 
     private enum CodingKeys: String, CodingKey {
         case mid, nameplate
         case fansMedal = "fans_medal"
-        case ipLocation = "ip_location"
     }
 
     var wornMedal: FansMedal.Medal? {
         guard fansMedal?.wear == true, let medal = fansMedal?.medal, let name = medal.medalName, !name.isEmpty else { return nil }
         return medal
-    }
-
-    var location: String? {
-        guard let raw = ipLocation?.replacingOccurrences(of: "IP属地：", with: "").trimmingCharacters(in: .whitespaces),
-              !raw.isEmpty else { return nil }
-        return raw
     }
 }
 

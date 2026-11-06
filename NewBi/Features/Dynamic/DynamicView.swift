@@ -24,6 +24,9 @@ final class DynamicModel {
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     /// 非 nil 时只看这个 UP 主的动态（空间页「动态」Tab），不需要登录
     let hostMid: Int?
+    /// 空间页里搜 TA 的动态（空为不搜）
+    private(set) var keyword = ""
+    @ObservationIgnored private var searchPage = 1
     /// 关注流属于哪个账号。换账号 / 退出时整份清空，迟到的旧账号响应按 epoch 丢弃
     private(set) var owner: Int?
     @ObservationIgnored private var epoch = 0
@@ -66,6 +69,15 @@ final class DynamicModel {
         if items.isEmpty, !isLoading { load(reset: true) }
     }
 
+    /// 空间页搜 TA 的动态；空字符串回到全部动态
+    func search(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hostMid != nil, trimmed != keyword else { return }
+        keyword = trimmed
+        items = []
+        load(reset: true)
+    }
+
     func loadMore(after item: DynamicItem) {
         guard item.id == items.last?.id else { return }
         load(reset: false)
@@ -75,15 +87,21 @@ final class DynamicModel {
         if reset {
             loadTask?.cancel()
             offset = ""
+            searchPage = 1
             hasMore = true
             isLoading = false
         }
         guard !isLoading, hasMore else { return }
         isLoading = true
         let type = filter.type, offset = offset, hostMid = hostMid, epoch = epoch, owner = owner
+        let keyword = keyword, searchPage = searchPage
         loadTask = Task {
             do {
-                let endpoint: Endpoint = hostMid.map { .spaceDynamic(mid: $0, offset: offset) } ?? .dynamicFeed(type: type, offset: offset)
+                let endpoint: Endpoint = if let hostMid, !keyword.isEmpty {
+                    .spaceDynamicSearch(mid: hostMid, keyword: keyword, page: searchPage, offset: offset)
+                } else {
+                    hostMid.map { .spaceDynamic(mid: $0, offset: offset) } ?? .dynamicFeed(type: type, offset: offset)
+                }
                 let feed = try await BiliClient.shared.get(endpoint, as: DynamicFeed.self)
                 guard !Task.isCancelled, epoch == self.epoch else { return }
                 let known = reset ? [] : Set(items.map(\.id))
@@ -92,7 +110,9 @@ final class DynamicModel {
                 // 整页重新拉到了：点赞状态以服务器为准
                 if reset { likeOverrides = [:] }
                 self.offset = feed.offset ?? ""
-                hasMore = (feed.hasMore ?? false) && !self.offset.isEmpty
+                self.searchPage = searchPage + 1
+                // 搜索结果按页码翻，offset 可能为空
+                hasMore = (feed.hasMore ?? false) && (!keyword.isEmpty || !self.offset.isEmpty)
                 if reset, hostMid == nil, type == "all", let owner, let baseline = feed.updateBaseline {
                     DynamicBadge.shared.markSeen(baseline: baseline, mid: owner)
                 }

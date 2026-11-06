@@ -23,7 +23,7 @@ final class SpaceModel {
     let mid: Int
     let relation: RelationModel
     private(set) var profile: SpaceCard?
-    /// UID、勋章、IP 属地（拿不到时不显示，不影响页面）
+    /// 粉丝勋章、成就勋章（拿不到时不显示，不影响页面）
     private(set) var accInfo: SpaceAccInfo?
     /// 投稿里搜索的关键词（空为不搜）
     private(set) var keyword = ""
@@ -208,7 +208,7 @@ struct SpaceView: View {
                         .opacity(tabPinned ? 0 : 1)
                         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { tabBarMinY = $0 }
                         .padding(.vertical, 12)
-                    if tab == .videos, searching || !model.keyword.isEmpty {
+                    if tab == .videos || tab == .dynamic, searching || !model.keyword.isEmpty || !model.dynamics.keyword.isEmpty {
                         searchBar.transition(.opacity)
                     }
                     tabContent
@@ -263,9 +263,10 @@ struct SpaceView: View {
                 }
                 Spacer(minLength: 0)
                 // 搜 TA 的投稿：切到「投稿」、弹出搜索框
-                GlassCircleButton(systemImage: "magnifyingglass", label: "搜索 TA 的视频") {
+                GlassCircleButton(systemImage: "magnifyingglass", label: "搜索 TA 的视频或动态") {
                     withAnimation(Motion.component) {
-                        tab = .videos
+                        // 在「动态」上就搜动态，其它 Tab 切到「投稿」搜视频
+                        if tab != .dynamic { tab = .videos }
                         searching = true
                     }
                     searchFocused = true
@@ -345,7 +346,7 @@ struct SpaceView: View {
                     }
                 }
 
-                // UID（点按复制）· IP 属地
+                // UID（点按复制）。IP 属地只有官方 App 接口给，网页接口（acc/info、card）都没有这个字段
                 HStack(spacing: 12) {
                     Button {
                         UIPasteboard.general.string = "\(model.mid)"
@@ -354,9 +355,6 @@ struct SpaceView: View {
                         Text("UID:\(String(model.mid))")
                     }
                     .buttonStyle(.plain)
-                    if let location = model.accInfo?.location {
-                        Text("IP属地：\(location)")
-                    }
                 }
                 .font(.system(size: 12))
                 .monospacedDigit()
@@ -408,20 +406,29 @@ struct SpaceView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: 搜索投稿
+    // MARK: 搜索投稿 / 动态
+
+    /// 在「动态」上搜动态，其余搜投稿
+    private func submitSearch(_ text: String) {
+        if tab == .dynamic {
+            model.dynamics.search(text)
+        } else {
+            model.search(text)
+        }
+    }
 
     private var searchBar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Theme.secondaryText)
-                TextField("搜索 TA 的视频", text: $query)
+                TextField(tab == .dynamic ? "搜索 TA 的动态" : "搜索 TA 的视频", text: $query)
                     .submitLabel(.search)
                     .focused($searchFocused)
-                    .onSubmit { model.search(query) }
+                    .onSubmit { submitSearch(query) }
                 if !query.isEmpty {
                     Button {
                         query = ""
-                        model.search("")
+                        submitSearch("")
                     } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.secondaryText)
                     }
@@ -436,6 +443,7 @@ struct SpaceView: View {
                 query = ""
                 searchFocused = false
                 model.search("")
+                model.dynamics.search("")
                 withAnimation(Motion.component) { searching = false }
             }
             .font(.system(size: 15))

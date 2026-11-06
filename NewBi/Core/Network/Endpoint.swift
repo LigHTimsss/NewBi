@@ -264,6 +264,14 @@ extension Endpoint {
 
     /// 投稿列表
     /// - Parameter order: pubdate 最新发布 · click 最多播放 · stow 最多收藏
+    /// 搜某个 UP 主的动态：返回格式和动态流一样（items / has_more / offset）
+    static func spaceDynamicSearch(mid: Int, keyword: String, page: Int, offset: String) -> Endpoint {
+        Endpoint(path: "/x/polymer/web-dynamic/v1/feed/space/search", query: [
+            "host_mid": "\(mid)", "page": "\(page)", "offset": offset, "keyword": keyword,
+            "features": "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard",
+        ])
+    }
+
     /// UID、勋章、IP 属地（WBI 签名）
     static func spaceAccInfo(mid: Int) -> Endpoint {
         var query = ["mid": "\(mid)", "platform": "web", "web_location": "1550101"]

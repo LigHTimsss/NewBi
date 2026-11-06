@@ -40,8 +40,12 @@ final class ShareCenter {
     }
 
     /// 收起分享框；动画结束后再做下一步（比如弹系统分享，免得两层同时出现）
+    /// 收起用「越来越快」的曲线：弹簧收尾很长，最后一小段像是卡了一下才收回去
+    private static let out = Animation.timingCurve(0.4, 0, 0.9, 0.6, duration: 0.28)
+
     fileprivate func dismiss(then next: (@MainActor () -> Void)? = nil) {
-        withAnimation(Motion.component, completionCriteria: .logicallyComplete) {
+        // 完全移除后再做下一步（弹系统分享、打开微信），不在收起的最后一段抢主线程
+        withAnimation(Self.out, completionCriteria: .removed) {
             payload = nil
         } completion: {
             next?()

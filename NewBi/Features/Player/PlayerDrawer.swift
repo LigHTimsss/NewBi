@@ -347,8 +347,8 @@ private struct QualityPanel: View {
             ForEach(controller.qualities) { option in
                 let on = option.id == controller.quality
                 Button {
-                    // 换画质要重新取流、建本地代理：等抽屉收完再做，不和收起动画抢主线程
-                    onClose { Task { await controller.changeQuality(option.id) } }
+                    // 选了立即生效，面板留着，由用户自己收起
+                    Task { await controller.changeQuality(option.id) }
                 } label: {
                     HStack(spacing: 8) {
                         Text(option.name).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity, alignment: .leading)
@@ -393,7 +393,7 @@ private struct QualityPanel: View {
 
 // MARK: - 倍速
 
-/// 倍速：竖排一列，从快到慢；选中后先收起抽屉，动画结束再换速度（换速度会重排屏上的弹幕）
+/// 倍速：竖排一列，从快到慢；选中立即生效，面板不自动收起
 private struct SpeedPanel: View {
     let controller: PlayerController
     var onClose: (@escaping @MainActor () -> Void) -> Void
@@ -405,7 +405,7 @@ private struct SpeedPanel: View {
             ForEach(PlayerController.speeds.reversed(), id: \.self) { speed in
                 let on = speed == controller.rate
                 Button {
-                    onClose { controller.setRate(speed) }
+                    controller.setRate(speed)
                 } label: {
                     Text(speed.speedLabel)
                         .font(.system(size: 15, weight: on ? .semibold : .medium))

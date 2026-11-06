@@ -199,8 +199,10 @@ struct CommentRow: View {
                     .textSelection(.enabled)
 
                 if let pictures = reply.content.pictures, !pictures.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(Array(pictures.prefix(3).enumerated()), id: \.element.imgSrc) { index, picture in
+                    // 图片多时横向滑动看全部（不再只露前 3 张）
+                    ScrollView(.horizontal) {
+                    LazyHStack(spacing: 6) {
+                        ForEach(Array(pictures.enumerated()), id: \.element.imgSrc) { index, picture in
                             Button {
                                 viewer = ImageViewerRequest(urls: pictures.map(\.imgSrc), index: index)
                             } label: {
@@ -210,9 +212,13 @@ struct CommentRow: View {
                                     .imageZoomSource(picture.imgSrc)
                             }
                             .buttonStyle(PressableStyle())
-                            .accessibilityLabel("查看图片 \(index + 1)")
+                            .accessibilityLabel("查看图片 \(index + 1) / \(pictures.count)")
                         }
                     }
+                    }
+                    .scrollIndicators(.hidden)
+                    .scrollClipDisabled()
+                    .frame(height: 96)
                     .imageViewer($viewer)
                 }
 
