@@ -60,14 +60,29 @@ final class SearchModel {
     @ObservationIgnored private var suggestTask: Task<Void, Never>?
     @ObservationIgnored private var loadTasks: [Kind: Task<Void, Never>] = [:]
     private static let historyKey = "searchHistory"
+    private static var hotCache: (words: [HotWord], fetchedAt: Date)?
+    private static var hotRefresh: Task<[HotWord]?, Never>?
 
     init() {
         history = UserDefaults.standard.stringArray(forKey: Self.historyKey) ?? []
+        hot = Self.hotCache?.words ?? []
     }
 
     func loadHot() async {
-        guard hot.isEmpty else { return }
-        hot = (try? await BiliClient.shared.get(.searchSquare, as: SearchSquare.self).trending?.list) ?? []
+        if let cache = Self.hotCache, Date.now.timeIntervalSince(cache.fetchedAt) < 300 {
+            hot = cache.words
+            return
+        }
+        // 快速退出再进入时共用请求；页面退出后，成功的响应仍可供下一次使用。
+        let refresh = Self.hotRefresh ?? Task { @MainActor () -> [HotWord]? in
+            defer { Self.hotRefresh = nil }
+            guard let response = try? await BiliClient.shared.get(.searchSquare, as: SearchSquare.self),
+                  let words = response.trending?.list else { return nil }
+            Self.hotCache = (words, .now)
+            return words
+        }
+        Self.hotRefresh = refresh
+        if let words = await refresh.value, !Task.isCancelled { hot = words }
     }
 
     /// 输入变化：200ms 防抖后请求联想词
@@ -186,7 +201,7 @@ final class SearchModel {
     }
 }
 
-/// 搜索页：从底部搜索按钮 zoom 展开
+/// 搜索页：从底部搜索按钮进入
 struct SearchView: View {
     @State private var model = SearchModel()
     @FocusState private var focused: Bool
@@ -205,12 +220,10 @@ struct SearchView: View {
         .toolbar(.hidden, for: .navigationBar)
         .animation(Motion.component, value: model.phase)
         .onChange(of: model.query) { model.queryChanged() }
-        .task {
-            // 等 zoom 转场结束再弹键盘，避免两段动画打架
-            try? await Task.sleep(for: .milliseconds(350))
+        .onAppear {
             if model.submitted == nil { focused = true }
-            await model.loadHot()
         }
+        .task { await model.loadHot() }
     }
 
     private var searchBar: some View {
