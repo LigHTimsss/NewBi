@@ -78,8 +78,9 @@ struct RootView: View {
                     case .settings: SettingsView()
                     case .storage: StorageView()
                     case .search:
-                        // 从搜索按钮放大展开，返回时缩回按钮
-                        SearchView().navigationTransition(.zoom(sourceID: "search", in: searchTransition))
+                        // 普通推入：zoom 转场自带「下拉返回」，在搜索结果里下拉会直接退回首页；
+                        // 现在只认侧滑返回，结果里下拉是刷新
+                        SearchView()
                     case .space(let mid):
                         SpaceView(mid: mid)
                     case .spaceDynamics(let mid):

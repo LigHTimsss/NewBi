@@ -98,13 +98,9 @@ struct ImageViewer: View {
             .ignoresSafeArea()
         }
         .overlay(alignment: .top) { topBar }
+        .overlay { actionSheet }
         // 分享框画在大图上面（大图是全屏覆盖，App 根部的分享框会被挡住）
         .overlay { SharePanelLayer() }
-        .confirmationDialog("图片", isPresented: $showActions, titleVisibility: .hidden) {
-            Button("保存到手机") { save() }
-            Button("分享") { share() }
-            Button("取消", role: .cancel) {}
-        }
         .toast($toast, bottomPadding: 60)
         // 分享框给出的提示（「图片已复制」等）平时显示在 App 根部，会被大图挡住，这里也接一份
         .toast(Binding(get: { ToastCenter.shared.message }, set: { ToastCenter.shared.message = $0 }), bottomPadding: 60)
@@ -125,11 +121,73 @@ struct ImageViewer: View {
                     .glassEffect(.clear, in: .capsule)
             }
             Spacer()
-            GlassCircleButton(systemImage: "ellipsis", label: "更多", glass: .clear) { showActions = true }
+            GlassCircleButton(systemImage: "ellipsis", label: "更多", glass: .clear) { setActions(true) }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 16)
         .opacity(dragOffset > 0 ? 0 : 1)
+    }
+
+    // MARK: 「…」面板：从底部滑出、停在底部
+
+    private var actionSheet: some View {
+        ZStack(alignment: .bottom) {
+            if showActions {
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                    .onTapGesture { setActions(false) }
+                    .accessibilityLabel("关闭")
+                    .transition(.opacity)
+                VStack(spacing: 10) {
+                    VStack(spacing: 0) {
+                        actionRow("保存到手机", icon: "square.and.arrow.down") {
+                            setActions(false)
+                            save()
+                        }
+                        Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5).padding(.horizontal, 16)
+                        actionRow("分享", icon: "square.and.arrow.up") {
+                            setActions(false)
+                            share()
+                        }
+                    }
+                    .glassEffect(.regular, in: .rect(cornerRadius: 26, style: .continuous))
+                    Button { setActions(false) } label: {
+                        Text("取消")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 54)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(PressableStyle())
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 26, style: .continuous))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: 520)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+                .transition(.move(edge: .bottom))
+                .accessibilityAddTraits(.isModal)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .allowsHitTesting(showActions)
+    }
+
+    private func actionRow(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 18)).frame(width: 24)
+                Text(title).font(.system(size: 17))
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .frame(minHeight: 56)
+            .contentShape(.rect)
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    private func setActions(_ visible: Bool) {
+        withAnimation(Motion.component) { showActions = visible }
     }
 
     // MARK: 保存 / 分享

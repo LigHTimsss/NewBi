@@ -25,11 +25,12 @@ final class SearchModel {
     }
 
     var query = ""
+    /// 视频 / UP 主两份结果各自保留：来回切换不重新加载，只在新搜索、改排序或下拉刷新时重来
     var kind: Kind = .video {
-        didSet { if kind != oldValue { startLoad(reset: true) } }
+        didSet { if kind != oldValue, !started.contains(kind) { startLoad(kind, reset: true) } }
     }
     var order: Order = .totalrank {
-        didSet { if order != oldValue { startLoad(reset: true) } }
+        didSet { if order != oldValue { startLoad(.video, reset: true) } }
     }
 
     private(set) var submitted: String?
@@ -38,8 +39,11 @@ final class SearchModel {
     private(set) var history: [String]
     private(set) var videos: [SearchVideo] = []
     private(set) var users: [SearchUser] = []
-    private(set) var isLoading = false
-    private(set) var error: String?
+    private var loading: Set<Kind> = []
+    private var errors: [Kind: String] = [:]
+
+    var isLoading: Bool { loading.contains(kind) }
+    var error: String? { errors[kind] }
 
     var phase: Phase {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
@@ -47,12 +51,14 @@ final class SearchModel {
         return trimmed == submitted ? .results : .suggesting
     }
 
-    var hasMore: Bool { page <= pages }
+    var hasMore: Bool { (pages[kind]?.next ?? 1) <= (pages[kind]?.total ?? 1) }
 
-    @ObservationIgnored private var page = 1
-    @ObservationIgnored private var pages = 1
+    /// 每种结果各自的分页：下一页页码、总页数
+    @ObservationIgnored private var pages: [Kind: (next: Int, total: Int)] = [:]
+    /// 这次搜索已经开始加载过的分类
+    @ObservationIgnored private var started: Set<Kind> = []
     @ObservationIgnored private var suggestTask: Task<Void, Never>?
-    @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var loadTasks: [Kind: Task<Void, Never>] = [:]
     private static let historyKey = "searchHistory"
 
     init() {
@@ -90,19 +96,28 @@ final class SearchModel {
         submitted = keyword
         suggestions = []
         remember(keyword)
-        startLoad(reset: true)
+        // 新关键词：两份结果都作废，先加载当前分类，另一份切过去时再加载
+        started = []
+        for kind in Kind.allCases where kind != self.kind { reset(kind) }
+        startLoad(kind, reset: true)
     }
 
     func loadMore(after id: Int) {
         let lastID = kind == .video ? videos.last?.id : users.last?.id
         guard id == lastID else { return }
-        startLoad(reset: false)
+        startLoad(kind, reset: false)
     }
 
     var isEmpty: Bool { kind == .video ? videos.isEmpty : users.isEmpty }
 
     func retry() {
-        startLoad(reset: true)
+        startLoad(kind, reset: true)
+    }
+
+    /// 下拉刷新当前分类
+    func refresh() async {
+        startLoad(kind, reset: true)
+        await loadTasks[kind]?.value
     }
 
     func clearHistory() {
@@ -117,22 +132,29 @@ final class SearchModel {
         UserDefaults.standard.set(history, forKey: Self.historyKey)
     }
 
-    /// 切换分类 / 排序会取消上一次请求，避免旧结果覆盖新结果
-    private func startLoad(reset: Bool) {
-        if reset {
-            loadTask?.cancel()
-            page = 1
-            pages = 1
-            videos = []
-            users = []
-            error = nil
-            isLoading = false
+    private func reset(_ kind: Kind) {
+        loadTasks[kind]?.cancel()
+        loadTasks[kind] = nil
+        pages[kind] = nil
+        errors[kind] = nil
+        loading.remove(kind)
+        switch kind {
+        case .video: videos = []
+        case .user: users = []
         }
-        guard let keyword = submitted, !isLoading, page <= pages else { return }
-        isLoading = true
-        let kind = kind, order = order, page = page
-        loadTask = Task {
+    }
+
+    /// 同一分类重新加载会取消它上一次的请求（避免旧结果覆盖新结果）；两个分类互不影响
+    private func startLoad(_ kind: Kind, reset: Bool) {
+        if reset { self.reset(kind) }
+        started.insert(kind)
+        let page = pages[kind]?.next ?? 1, total = pages[kind]?.total ?? 1
+        guard let keyword = submitted, !loading.contains(kind), page <= total else { return }
+        loading.insert(kind)
+        let order = order
+        loadTasks[kind] = Task {
             do {
+                let total: Int
                 switch kind {
                 case .video:
                     let result = try await BiliClient.shared.get(
@@ -142,7 +164,7 @@ final class SearchModel {
                     guard !Task.isCancelled else { return }
                     let known = Set(videos.map(\.id))
                     videos += (result.result ?? []).filter { !known.contains($0.id) && !$0.bvid.isEmpty }
-                    pages = result.numPages ?? 1
+                    total = result.numPages ?? 1
                 case .user:
                     let result = try await BiliClient.shared.get(
                         .search(keyword: keyword, type: "bili_user", page: page, order: nil),
@@ -151,15 +173,15 @@ final class SearchModel {
                     guard !Task.isCancelled else { return }
                     let known = Set(users.map(\.id))
                     users += (result.result ?? []).filter { !known.contains($0.id) }
-                    pages = result.numPages ?? 1
+                    total = result.numPages ?? 1
                 }
-                self.page = page + 1
-                error = nil
+                pages[kind] = (page + 1, total)
+                errors[kind] = nil
             } catch {
                 guard !Task.isCancelled else { return }
-                self.error = error.localizedDescription
+                errors[kind] = error.localizedDescription
             }
-            isLoading = false
+            loading.remove(kind)
         }
     }
 }
@@ -381,6 +403,8 @@ private struct SearchResults: View {
             .padding(.bottom, 32)
         }
         .scrollDismissesKeyboard(.immediately)
+        // 下拉只刷新结果（不再触发返回）
+        .refreshable { await model.refresh() }
         .transition(.opacity)
     }
 

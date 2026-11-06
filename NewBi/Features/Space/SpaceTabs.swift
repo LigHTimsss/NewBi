@@ -18,7 +18,6 @@ struct SpaceDynamics: View {
                     onComment: { commentTarget = CommentTarget(item: item) },
                     onImage: { urls, i in viewer = ImageViewerRequest(urls: urls, index: i) }
                 )
-                .riseIn(index: index)
                 .onAppear { model.loadMore(after: item) }
             }
             if model.isLoading {
@@ -57,7 +56,6 @@ struct SpaceSeasons: View {
                 }
                 ForEach(Array(seasons.enumerated()), id: \.element.id) { index, season in
                     SeasonSection(season: season, mid: model.mid, owner: model.profile.map { Owner(mid: model.mid, name: $0.card.name, face: $0.card.face) })
-                        .riseIn(index: index)
                 }
             } else if let error = model.seasonsError {
                 ContentUnavailableView {
@@ -214,7 +212,6 @@ struct SeasonView: View {
                     }
                     .buttonStyle(PressableStyle())
                     .watchLaterMenu(card)
-                    .riseIn(index: index)
                     .task { await model.loadMore(after: archive) }
                 }
                 if model.isLoading {
@@ -252,7 +249,6 @@ struct SpaceFavorites: View {
                                 FolderCard(folder: folder)
                             }
                             .buttonStyle(PressableStyle())
-                            .riseIn(index: index)
                         }
                     }
                 }

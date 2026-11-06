@@ -113,6 +113,27 @@ final class SpaceModel {
         await load()
     }
 
+    /// 下拉刷新：资料（不清空，新数据回来直接替换）+ 当前 Tab 的内容
+    func refresh(_ tab: Tab) async {
+        if let card = try? await BiliClient.shared.get(.spaceCard(mid: mid), as: SpaceCard.self) {
+            profile = card
+            relation.seed(card.following)
+        }
+        if let acc = try? await BiliClient.shared.get(.spaceAccInfo(mid: mid), as: SpaceAccInfo.self) { accInfo = acc }
+        switch tab {
+        case .home, .videos:
+            if keyword.isEmpty { recent = [] }
+            loadVideos(reset: true)
+            await loadTask?.value
+        case .dynamic:
+            await dynamics.refresh()
+        case .seasons:
+            await loadSeasons(force: true)
+        case .favorites:
+            await loadFavorites(force: true)
+        }
+    }
+
     func loadMore(after video: SpaceVideo) {
         guard video.id == videos.last?.id else { return }
         loadVideos(reset: false)
@@ -200,6 +221,8 @@ struct SpaceView: View {
                 .padding(.bottom, 40)
             }
             .ignoresSafeArea(edges: .top)
+            // 下拉刷新：资料 + 当前这个 Tab 的内容
+            .refreshable { await model.refresh(tab) }
             .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y > 150 } action: { _, value in
                 withAnimation(Motion.micro) { collapsed = value }
             }
@@ -569,7 +592,6 @@ private struct SpaceHome: View {
                             VideoLink(card: video.card) { VideoCardView(card: video.card, showsOwner: false) }
                                 .buttonStyle(PressableStyle())
                                 .watchLaterMenu(video.card)
-                                .riseIn(index: index)
                         }
                     }
                 }
@@ -676,7 +698,6 @@ private struct SpaceVideos: View {
                 VideoLink(card: video.card) { VideoRow(card: video.card, subtitle: video.subtitle) }
                     .buttonStyle(PressableStyle())
                     .watchLaterMenu(video.card)
-                    .riseIn(index: index)
                     .onAppear { model.loadMore(after: video) }
             }
 
