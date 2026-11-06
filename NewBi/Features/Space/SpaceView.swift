@@ -172,6 +172,7 @@ final class SpaceModel {
 
 /// UP 主空间：头图 + 资料 + 主页 / 投稿。结构参考 B 站空间页，视觉沿用本 App 的玻璃风格
 struct SpaceView: View {
+    private let initialTab: SpaceModel.Tab
     @State private var model: SpaceModel
     @State private var tab: SpaceModel.Tab = .home
     @State private var headerHeight: CGFloat = 0
@@ -191,6 +192,7 @@ struct SpaceView: View {
 
     /// - Parameter initialTab: 一进来就停在哪个 Tab：默认「投稿」（和官方客户端一样）；我的页点「动态」时直接看动态
     init(mid: Int, initialTab: SpaceModel.Tab = .videos) {
+        self.initialTab = initialTab
         _model = State(initialValue: SpaceModel(mid: mid))
         _tab = State(initialValue: initialTab)
         _visited = State(initialValue: [initialTab])
@@ -199,6 +201,13 @@ struct SpaceView: View {
     /// 顶栏底边（全局坐标）：Tab 栏滚到这里就吸顶
     private var topBarBottom: CGFloat { topInset + 52 }
     private var pinOffset: CGFloat { max(0, headerHeight + 12 - topBarBottom) }
+
+    // 五个等宽页面，初始偏移量为入口页序号 × 视口宽度。
+    private var initialPageAnchor: UnitPoint {
+        let pages = SpaceModel.Tab.allCases
+        let index = pages.firstIndex(of: initialTab) ?? 0
+        return UnitPoint(x: CGFloat(index) / CGFloat(max(1, pages.count - 1)), y: 0)
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -468,7 +477,7 @@ struct SpaceView: View {
                                        searching || !model.keyword.isEmpty || !model.dynamics.keyword.isEmpty {
                                         searchBar
                                     }
-                                    if visited.contains(page) {
+                                    if page == tab || visited.contains(page) {
                                         tabContent(for: page)
                                     }
                                 }
@@ -483,10 +492,12 @@ struct SpaceView: View {
                     }
                 }
                 .scrollTargetLayout()
+                .background { SpacePagerPopPriority().allowsHitTesting(false) }
             }
             .scrollIndicators(.hidden)
             .coordinateSpace(name: "space-horizontal-pager")
             .scrollTargetBehavior(.paging)
+            .defaultScrollAnchor(initialPageAnchor, for: .initialOffset)
             .scrollPosition(id: Binding(
                 get: { Optional(tab) },
                 set: { page in
@@ -494,7 +505,7 @@ struct SpaceView: View {
                     searchFocused = false
                     tab = page
                 }
-            ))
+            ), anchor: .leading)
             .onChange(of: tab, initial: true) { _, selected in
                 let tabs = SpaceModel.Tab.allCases
                 guard let index = tabs.firstIndex(of: selected) else { return }
@@ -533,6 +544,51 @@ struct SpaceView: View {
         case .videos: SpaceVideos(model: model)
         case .seasons: SpaceSeasons(model: model)
         case .favorites: SpaceFavorites(model: model)
+        }
+    }
+}
+
+/// 只让空间分页的 pan 等待导航栈的边缘返回；屏幕中间仍由原生分页处理。
+private struct SpacePagerPopPriority: UIViewRepresentable {
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ view: Probe, context: Context) { view.connect() }
+
+    final class Probe: UIView {
+        private weak var installedPan: UIPanGestureRecognizer?
+        private weak var installedPop: UIGestureRecognizer?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            connect()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            connect()
+        }
+
+        func connect() {
+            guard window != nil else { return }
+            var ancestor = superview
+            while let view = ancestor, !(view is UIScrollView) { ancestor = view.superview }
+            guard let pager = ancestor as? UIScrollView else { return }
+
+            var responder: UIResponder? = pager
+            while let current = responder {
+                if let controller = current as? UIViewController,
+                   let navigation = controller.navigationController,
+                   let pop = navigation.interactivePopGestureRecognizer {
+                    let pan = pager.panGestureRecognizer
+                    if installedPan !== pan || installedPop !== pop {
+                        BackGesture.shared.attach(to: navigation)
+                        pan.require(toFail: pop)
+                        installedPan = pan
+                        installedPop = pop
+                    }
+                    return
+                }
+                responder = current.next
+            }
         }
     }
 }
