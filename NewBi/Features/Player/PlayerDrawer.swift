@@ -516,11 +516,6 @@ struct MorePanel: View {
                 }
             }
             .disabled(aid <= 0)
-            if !model.card.bvid.isEmpty {
-                tile("square.and.arrow.up", "分享") {
-                    ShareCenter.shared.video(bvid: model.card.bvid, title: model.detail?.title ?? model.card.title)
-                }
-            }
         }
     }
 
