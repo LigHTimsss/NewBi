@@ -383,16 +383,25 @@ private struct SearchResults: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        @Bindable var search = model
         VStack(spacing: 0) {
             header(search: model)
                 .padding(.horizontal, 16)
-            TabView(selection: $search.kind) {
-                ForEach(SearchModel.Kind.allCases, id: \.self) { kind in
-                    page(kind).tag(kind)
+            ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(SearchModel.Kind.allCases, id: \.self) { kind in
+                        page(kind)
+                            .containerRelativeFrame(.horizontal)
+                            .id(kind)
+                    }
                 }
+                .scrollTargetLayout()
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: Binding(
+                get: { Optional(model.kind) },
+                set: { if let kind = $0, kind != model.kind { model.kind = kind } }
+            ))
         }
         .transition(.opacity)
     }

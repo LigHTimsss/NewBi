@@ -174,8 +174,8 @@ final class SpaceModel {
 struct SpaceView: View {
     @State private var model: SpaceModel
     @State private var tab: SpaceModel.Tab = .home
-    /// 上一次左右滑的方向：决定内容从哪一侧推进来
-    @State private var swipeForward = true
+    @State private var pageHeights: [SpaceModel.Tab: CGFloat] = [:]
+    @State private var viewportHeight: CGFloat = 1
     @State private var signExpanded = false
     @State private var collapsed = false
     @State private var tabBarMinY: CGFloat = .infinity
@@ -211,12 +211,7 @@ struct SpaceView: View {
                     if tab == .videos || tab == .dynamic, searching || !model.keyword.isEmpty || !model.dynamics.keyword.isEmpty {
                         searchBar.transition(.opacity)
                     }
-                    tabContent
-                        .id(tab)
-                        // 左右滑切到相邻的 Tab：往左滑是下一个，往右滑是上一个，内容跟着从对应一侧推进来
-                        .transition(.push(from: swipeForward ? .trailing : .leading))
-                        .contentShape(.rect)
-                        .gesture(SpaceTabPan(onSwipe: switchTab))
+                    tabPager
                 }
                 .padding(.bottom, 40)
             }
@@ -234,6 +229,7 @@ struct SpaceView: View {
                 }
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = max(1, $0) }
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
         .background(Theme.background)
         .toolbar(.hidden, for: .navigationBar)
@@ -456,13 +452,7 @@ struct SpaceView: View {
     // MARK: Tab
 
     private var tabBar: some View {
-        // 点 Tab 也按左右位置决定内容从哪一侧推进来
-        let selection = Binding<SpaceModel.Tab>(get: { tab }, set: { new in
-            let tabs = SpaceModel.Tab.allCases
-            swipeForward = (tabs.firstIndex(of: new) ?? 0) > (tabs.firstIndex(of: tab) ?? 0)
-            tab = new
-        })
-        return GlassSegmented(options: SpaceModel.Tab.allCases, selection: selection) { item in
+        GlassSegmented(options: SpaceModel.Tab.allCases, selection: $tab) { item in
             if item == .videos, let count = model.videoCount ?? model.profile?.archiveCount {
                 return "投稿 \(count.biliCount)"
             }
@@ -473,19 +463,38 @@ struct SpaceView: View {
         .padding(.horizontal, 12)
     }
 
-    private func switchTab(forward: Bool) {
-        let tabs = SpaceModel.Tab.allCases
-        guard let current = tabs.firstIndex(of: tab) else { return }
-        let next = forward ? current + 1 : current - 1
-        guard tabs.indices.contains(next) else { return }
-        swipeForward = forward
-        searchFocused = false
-        withAnimation(Motion.tab) { tab = tabs[next] }
+    private var tabPager: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(alignment: .top, spacing: 0) {
+                ForEach(SpaceModel.Tab.allCases, id: \.self) { page in
+                    tabContent(for: page)
+                        .containerRelativeFrame(.horizontal)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { height in
+                            if pageHeights[page] != height { pageHeights[page] = height }
+                        }
+                        .frame(minHeight: viewportHeight, alignment: .top)
+                        .id(page)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollIndicators(.hidden)
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: Binding(
+            get: { Optional(tab) },
+            set: { page in
+                guard let page, page != tab else { return }
+                searchFocused = false
+                tab = page
+            }
+        ))
+        .frame(height: max(viewportHeight, pageHeights[tab] ?? 0), alignment: .top)
     }
 
     @ViewBuilder
-    private var tabContent: some View {
-        switch tab {
+    private func tabContent(for page: SpaceModel.Tab) -> some View {
+        switch page {
         case .home: SpaceHome(model: model, showAll: { withAnimation(Motion.tab) { tab = .videos } })
         case .dynamic: SpaceDynamics(model: model.dynamics)
         case .videos: SpaceVideos(model: model)
@@ -496,53 +505,6 @@ struct SpaceView: View {
 }
 
 // MARK: - 头图：下拉放大、上滑视差
-
-/// 一旦认出横拖就取消卡片按压；松手时再决定是否翻页。
-private struct SpaceTabPan: UIGestureRecognizerRepresentable {
-    let onSwipe: (Bool) -> Void
-
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
-
-    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
-        let pan = UIPanGestureRecognizer()
-        pan.maximumNumberOfTouches = 1
-        pan.cancelsTouchesInView = true
-        pan.delegate = context.coordinator
-        return pan
-    }
-
-    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
-        guard pan.state == .ended else { return }
-        let delta = pan.translation(in: pan.view)
-        guard abs(delta.x) > 70, abs(delta.x) > abs(delta.y) * 1.6 else { return }
-        onSwipe(delta.x < 0)
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard touch.location(in: touch.window).x > 30 else { return false }
-            // 横向内容区域自己处理拖动，包括滚到首尾时的回弹。
-            var view = touch.view
-            while let current = view {
-                if let scroll = current as? UIScrollView, scroll.isScrollEnabled,
-                   scroll.alwaysBounceHorizontal ||
-                    scroll.contentSize.width + scroll.adjustedContentInset.left + scroll.adjustedContentInset.right > scroll.bounds.width + 1 {
-                    return false
-                }
-                if current === gestureRecognizer.view { break }
-                view = current.superview
-            }
-            return true
-        }
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
-            let velocity = pan.velocity(in: pan.view)
-            return abs(velocity.x) > abs(velocity.y) * 1.6
-        }
-    }
-}
 
 private struct SpaceBanner: View {
     let url: String?
