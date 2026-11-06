@@ -98,7 +98,9 @@ struct ImageViewer: View {
             .ignoresSafeArea()
         }
         .overlay(alignment: .top) { topBar }
-        .overlay { actionSheet }
+        .overlay {
+            ImageActionMenu(showActions: $showActions, url: currentURL, save: save, share: share)
+        }
         // 分享框画在大图上面（大图是全屏覆盖，App 根部的分享框会被挡住）
         .overlay { SharePanelLayer() }
         .toast($toast, bottomPadding: 60)
@@ -121,73 +123,13 @@ struct ImageViewer: View {
                     .glassEffect(.clear, in: .capsule)
             }
             Spacer()
-            GlassCircleButton(systemImage: "ellipsis", label: "更多", glass: .clear) { setActions(true) }
+            GlassCircleButton(systemImage: "ellipsis", label: "更多", glass: .clear) {
+                withAnimation(Motion.component) { showActions = true }
+            }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 16)
         .opacity(dragOffset > 0 ? 0 : 1)
-    }
-
-    // MARK: 「…」面板：从底部滑出、停在底部
-
-    private var actionSheet: some View {
-        ZStack(alignment: .bottom) {
-            if showActions {
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
-                    .onTapGesture { setActions(false) }
-                    .accessibilityLabel("关闭")
-                    .transition(.opacity)
-                VStack(spacing: 10) {
-                    VStack(spacing: 0) {
-                        actionRow("保存到手机", icon: "square.and.arrow.down") {
-                            setActions(false)
-                            save()
-                        }
-                        Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5).padding(.horizontal, 16)
-                        actionRow("分享", icon: "square.and.arrow.up") {
-                            setActions(false)
-                            share()
-                        }
-                    }
-                    .glassEffect(.regular, in: .rect(cornerRadius: 26, style: .continuous))
-                    Button { setActions(false) } label: {
-                        Text("取消")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(maxWidth: .infinity, minHeight: 54)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(PressableStyle())
-                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 26, style: .continuous))
-                }
-                .foregroundStyle(.white)
-                .frame(maxWidth: 520)
-                .padding(.horizontal, 10)
-                .padding(.bottom, 8)
-                .transition(.move(edge: .bottom))
-                .accessibilityAddTraits(.isModal)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .allowsHitTesting(showActions)
-    }
-
-    private func actionRow(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: icon).font(.system(size: 18)).frame(width: 24)
-                Text(title).font(.system(size: 17))
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .frame(minHeight: 56)
-            .contentShape(.rect)
-        }
-        .buttonStyle(PressableStyle())
-    }
-
-    private func setActions(_ visible: Bool) {
-        withAnimation(Motion.component) { showActions = visible }
     }
 
     // MARK: 保存 / 分享
@@ -200,8 +142,8 @@ struct ImageViewer: View {
     }
 
     /// 原图（不走列表的缩放地址，保存的是完整清晰度、原格式）
-    private func originalData() async -> Data? {
-        guard let url = currentURL else { return nil }
+    private func originalData(_ url: URL?) async -> Data? {
+        guard let url else { return nil }
         var request = URLRequest(url: url)
         request.setValue(BiliClient.referer, forHTTPHeaderField: "Referer")
         guard let (data, response) = try? await URLSession.shared.data(for: request),
@@ -210,10 +152,10 @@ struct ImageViewer: View {
     }
 
     /// 只申请「添加照片」权限，存进系统相册
-    private func save() {
+    private func save(_ url: URL?) {
         Task {
             toast = "正在保存…"
-            guard let data = await originalData() else {
+            guard let data = await originalData(url) else {
                 toast = "图片下载失败，请稍后重试"
                 return
             }
@@ -246,9 +188,9 @@ struct ImageViewer: View {
         }
     }
 
-    private func share() {
+    private func share(_ url: URL?) {
         Task {
-            guard let data = await originalData(), let image = UIImage(data: data) else {
+            guard let data = await originalData(url), let image = UIImage(data: data) else {
                 toast = "图片下载失败，请稍后重试"
                 return
             }
@@ -276,5 +218,86 @@ private struct ZoomableImage: View {
                 withAnimation(Motion.component) { scale = scale > 1 ? 1 : 2.5 }
             }
             .accessibilityAddTraits(.isImage)
+    }
+}
+
+
+private struct ImageActionMenu: View {
+    @Binding var showActions: Bool
+    let url: URL?
+    let save: (URL?) -> Void
+    let share: (URL?) -> Void
+    @State private var closingActions = false
+
+    // MARK: 「…」面板：从底部滑出、停在底部
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            if showActions {
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                    .onTapGesture { dismissActions() }
+                    .accessibilityLabel("关闭")
+                    .transition(.opacity)
+                VStack(spacing: 10) {
+                    VStack(spacing: 0) {
+                        actionRow("保存到手机", icon: "square.and.arrow.down") {
+                            let selectedURL = url
+                            dismissActions { save(selectedURL) }
+                        }
+                        Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5).padding(.horizontal, 16)
+                        actionRow("分享", icon: "square.and.arrow.up") {
+                            let selectedURL = url
+                            dismissActions { share(selectedURL) }
+                        }
+                    }
+                    .glassEffect(.regular, in: .rect(cornerRadius: 26, style: .continuous))
+                    Button { dismissActions() } label: {
+                        Text("取消")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 54)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(PressableStyle())
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 26, style: .continuous))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: 520)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+                .transition(.move(edge: .bottom))
+                .accessibilityAddTraits(.isModal)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .background {
+            if closingActions { Color.clear.contentShape(.rect).onTapGesture {} }
+        }
+        .allowsHitTesting(showActions || closingActions)
+    }
+
+    private func actionRow(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 18)).frame(width: 24)
+                Text(title).font(.system(size: 17))
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .frame(minHeight: 56)
+            .contentShape(.rect)
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    private func dismissActions(then next: (@MainActor () -> Void)? = nil) {
+        guard showActions, !closingActions else { return }
+        closingActions = true
+        withAnimation(.timingCurve(0.4, 0, 0.9, 0.6, duration: 0.3), completionCriteria: .removed) {
+            showActions = false
+        } completion: {
+            closingActions = false
+            next?()
+        }
     }
 }

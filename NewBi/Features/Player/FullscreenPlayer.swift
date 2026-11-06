@@ -83,30 +83,7 @@ struct FullscreenOverlay: View {
                     .transition(.opacity)
             }
 
-            if panel != nil {
-                // 点击抽屉外关闭（透明，不跟着滑）
-                Color.clear
-                    .contentShape(.rect)
-                    .onTapGesture { closePanel() }
-                    .accessibilityLabel("关闭面板")
-            }
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                if let panel {
-                    Group {
-                        if panel == .comments {
-                            CommentsPanel(model: model.comments) { closePanel() }
-                        } else {
-                            PlayerDrawer(panel: panel, controller: player, model: model) { closePanel(then: $0) }
-                        }
-                    }
-                    // 评论浮窗宽度可伸缩：先占满它要的宽度，剩下的才给左边的空白
-                    .layoutPriority(1)
-                    // 只按抽屉自己的宽度滑进滑出：以前连同整屏宽的透明层一起平移，
-                    // 横屏下位移是抽屉宽度的两倍多，同样 420ms 走完显得一顿一顿
-                    .transition(.move(edge: .trailing))
-                }
-            }
+            FullscreenPanelLayer(panel: $panel, model: model, close: { closePanel(then: $0) }, changed: scheduleHide)
         }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
@@ -119,7 +96,6 @@ struct FullscreenOverlay: View {
             player.setBoost(hold.active)
             hud = hold.active && player.isBoosting ? .boost(player.boostRate) : nil
         }
-        .onChange(of: panel) { scheduleHide() }
         .onChange(of: inputFocused) { scheduleHide() }
     }
 
@@ -576,5 +552,42 @@ private struct HUDView: View {
             .overlay(alignment: .leading) {
                 Capsule().fill(accent).frame(width: 140 * min(max(value, 0), 1), height: 3)
             }
+    }
+}
+
+private struct FullscreenPanelLayer: View {
+    @Binding var panel: PlayerPanel?
+    let model: VideoDetailModel
+    let close: ((@MainActor () -> Void)?) -> Void
+    let changed: () -> Void
+
+    var body: some View {
+        ZStack {
+            if panel != nil {
+                // 点击抽屉外关闭（透明，不跟着滑）
+                Color.clear
+                    .contentShape(.rect)
+                    .onTapGesture { close(nil) }
+                    .accessibilityLabel("关闭面板")
+            }
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                if let panel {
+                    Group {
+                        if panel == .comments {
+                            CommentsPanel(model: model.comments) { close(nil) }
+                        } else {
+                            PlayerDrawer(panel: panel, controller: model.player, model: model) { close($0) }
+                        }
+                    }
+                    // 评论浮窗宽度可伸缩：先占满它要的宽度，剩下的才给左边的空白
+                    .layoutPriority(1)
+                    // 只按抽屉自己的宽度滑进滑出：以前连同整屏宽的透明层一起平移，
+                    // 横屏下位移是抽屉宽度的两倍多，同样 420ms 走完显得一顿一顿
+                    .transition(.move(edge: .trailing))
+                }
+            }
+        }
+        .onChange(of: panel) { changed() }
     }
 }

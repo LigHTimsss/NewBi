@@ -152,6 +152,10 @@ private struct DanmakuPanel: View {
     private var settings: DanmakuSettings { controller.danmakuSettings }
 
     var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0) { sections }
+    }
+
+    @ViewBuilder private var sections: some View {
         PanelTitle("弹幕设置")
         PanelCard {
             sliderRow("显示区域", "\(Int(settings.areaRatio * 100))%", in: 0...4, step: 1, value: Binding(
