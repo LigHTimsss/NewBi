@@ -23,6 +23,15 @@ struct PlayerDrawer: View {
     private var narrow: Bool { panel == .speed || panel == .quality }
 
     var body: some View {
+        if narrow {
+            // 在固定宽度的抽屉边界解析滑动位移，文字、描边和材质一起移动。
+            drawer.geometryGroup()
+        } else {
+            drawer
+        }
+    }
+
+    private var drawer: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 switch panel {
@@ -347,7 +356,7 @@ private struct QualityPanel: View {
         if controller.qualities.isEmpty {
             ProgressView().frame(maxWidth: .infinity)
         }
-        VStack(spacing: 2) {
+        LazyVStack(spacing: 2) {
             ForEach(controller.qualities) { option in
                 let on = option.id == controller.quality
                 Button {
