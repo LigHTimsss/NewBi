@@ -37,7 +37,6 @@ struct RootView: View {
     @State private var leaving: Set<AppTab> = []
     @State private var switchID = 0
     @Environment(SessionStore.self) private var session
-    @Namespace private var searchTransition
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -64,13 +63,13 @@ struct RootView: View {
             .overlay(alignment: .bottom) {
                 GlassTabBar(
                     selection: tab,
-                    searchTransition: searchTransition,
                     badges: DynamicBadge.shared.hasNew && tab != .dynamic ? [.dynamic] : [],
                     onSelect: select
                 ) {
                     path.append(Route.search)
                 }
             }
+            .ignoresSafeArea(.keyboard)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Route.self) { route in
                 Group {

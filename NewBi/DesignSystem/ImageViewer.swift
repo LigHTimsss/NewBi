@@ -25,6 +25,10 @@ extension View {
     /// 标记缩略图：大图从这里放大展开、关闭时缩回这里
     func imageZoomSource(_ url: String) -> some View {
         modifier(ImageZoomSource(url: url))
+            .contextMenu {
+                Button("保存到手机", systemImage: "square.and.arrow.down") { ViewerImageAction.save(ViewerImageAction.url(url)) }
+                Button("分享", systemImage: "square.and.arrow.up") { ViewerImageAction.share(ViewerImageAction.url(url)) }
+            }
     }
 }
 
@@ -60,7 +64,6 @@ struct ImageViewer: View {
     @State private var index: Int
     @State private var dragOffset: CGFloat = 0
     @State private var showActions = false
-    @State private var toast: String?
     @Environment(\.dismiss) private var dismiss
 
     init(urls: [String], index: Int) {
@@ -76,7 +79,7 @@ struct ImageViewer: View {
 
             TabView(selection: $index) {
                 ForEach(urls.indices, id: \.self) { i in
-                    ZoomableImage(url: urls[i])
+                    ZoomableImage(url: urls[i], onMore: openActions)
                         .tag(i)
                 }
             }
@@ -99,11 +102,10 @@ struct ImageViewer: View {
         }
         .overlay(alignment: .top) { topBar }
         .overlay {
-            ImageActionMenu(showActions: $showActions, url: currentURL, save: save, share: share)
+            ImageActionMenu(showActions: $showActions, url: currentURL, save: ViewerImageAction.save, share: ViewerImageAction.share)
         }
         // 分享框画在大图上面（大图是全屏覆盖，App 根部的分享框会被挡住）
         .overlay { SharePanelLayer() }
-        .toast($toast, bottomPadding: 60)
         // 分享框给出的提示（「图片已复制」等）平时显示在 App 根部，会被大图挡住，这里也接一份
         .toast(Binding(get: { ToastCenter.shared.message }, set: { ToastCenter.shared.message = $0 }), bottomPadding: 60)
         .animation(Motion.micro, value: index)
@@ -123,26 +125,35 @@ struct ImageViewer: View {
                     .glassEffect(.clear, in: .capsule)
             }
             Spacer()
-            GlassCircleButton(systemImage: "ellipsis", label: "更多", glass: .clear) {
-                withAnimation(Motion.component) { showActions = true }
-            }
+            GlassCircleButton(systemImage: "ellipsis", label: "更多", glass: .clear, action: openActions)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 16)
         .opacity(dragOffset > 0 ? 0 : 1)
     }
 
+    private func openActions() {
+        withAnimation(Motion.component) { showActions = true }
+    }
+
     // MARK: 保存 / 分享
 
     private var currentURL: URL? {
         guard urls.indices.contains(index) else { return nil }
-        var raw = urls[index]
+        return ViewerImageAction.url(urls[index])
+    }
+}
+
+@MainActor
+private enum ViewerImageAction {
+    static func url(_ source: String) -> URL? {
+        var raw = source
         if raw.hasPrefix("//") { raw = "https:" + raw }
         return URL(string: raw.replacingOccurrences(of: "http://", with: "https://"))
     }
 
     /// 原图（不走列表的缩放地址，保存的是完整清晰度、原格式）
-    private func originalData(_ url: URL?) async -> Data? {
+    private static func originalData(_ url: URL?) async -> Data? {
         guard let url else { return nil }
         var request = URLRequest(url: url)
         request.setValue(BiliClient.referer, forHTTPHeaderField: "Referer")
@@ -152,19 +163,19 @@ struct ImageViewer: View {
     }
 
     /// 只申请「添加照片」权限，存进系统相册
-    private func save(_ url: URL?) {
+    static func save(_ url: URL?) {
         Task {
-            toast = "正在保存…"
+            ToastCenter.shared.show("正在保存…")
             guard let data = await originalData(url) else {
-                toast = "图片下载失败，请稍后重试"
+                ToastCenter.shared.show("图片下载失败，请稍后重试")
                 return
             }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard status == .authorized || status == .limited else {
-                toast = "没有相册权限，可在「设置 → NewBi → 照片」里允许添加"
+                ToastCenter.shared.show("没有相册权限，可在「设置 → NewBi → 照片」里允许添加")
                 return
             }
-            toast = await Self.addToLibrary(data) ? "已保存到相册" : "保存失败，请稍后重试"
+            ToastCenter.shared.show(await addToLibrary(data) ? "已保存到相册" : "保存失败，请稍后重试")
         }
     }
 
@@ -188,10 +199,10 @@ struct ImageViewer: View {
         }
     }
 
-    private func share(_ url: URL?) {
+    static func share(_ url: URL?) {
         Task {
             guard let data = await originalData(url), let image = UIImage(data: data) else {
-                toast = "图片下载失败，请稍后重试"
+                ToastCenter.shared.show("图片下载失败，请稍后重试")
                 return
             }
             ShareCenter.shared.shareImage(image)
@@ -201,6 +212,7 @@ struct ImageViewer: View {
 
 private struct ZoomableImage: View {
     let url: String
+    let onMore: () -> Void
     @State private var scale: CGFloat = 1
     @GestureState private var pinch: CGFloat = 1
 
@@ -217,6 +229,8 @@ private struct ZoomableImage: View {
             .onTapGesture(count: 2) {
                 withAnimation(Motion.component) { scale = scale > 1 ? 1 : 2.5 }
             }
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.5, maximumDistance: 10).onEnded { _ in onMore() })
+            .accessibilityAction(named: "更多", onMore)
             .accessibilityAddTraits(.isImage)
     }
 }

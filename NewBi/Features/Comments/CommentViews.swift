@@ -206,7 +206,7 @@ struct CommentRow: View {
                             Button {
                                 viewer = ImageViewerRequest(urls: pictures.map(\.imgSrc), index: index)
                             } label: {
-                                RemoteImage(url: picture.imgSrc, size: CGSize(width: 96, height: 96))
+                                RemoteImage(url: picture.imgSrc, size: CGSize(width: 96, height: 96), cropOnServer: false)
                                     .frame(width: 96, height: 96)
                                     .clipShape(.rect(cornerRadius: 8))
                                     .imageZoomSource(picture.imgSrc)

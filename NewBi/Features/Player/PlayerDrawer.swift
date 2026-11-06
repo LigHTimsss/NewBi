@@ -62,7 +62,7 @@ struct PlayerDrawer: View {
             case .danmaku: DanmakuPanel(controller: controller)
             case .quality: QualityPanel(controller: controller, onClose: onClose)
             case .speed: SpeedPanel(controller: controller, onClose: onClose)
-            case .more: MorePanel(controller: controller)
+            case .more: MorePanel(model: model)
             case .parts: PartsPanel(model: model)
             case .comments: EmptyView()
             }
@@ -458,8 +458,9 @@ private struct SpeedPanel: View {
 
 // MARK: - 更多
 
-private struct MorePanel: View {
-    let controller: PlayerController
+struct MorePanel: View {
+    let model: VideoDetailModel
+    private var controller: PlayerController { model.player }
     @AppStorage("backgroundPlay") private var backgroundPlay = true
     @Environment(\.accent) private var accent
 
@@ -502,6 +503,23 @@ private struct MorePanel: View {
                     .frame(width: 48, height: 48)
                     .background(.white.opacity(0.08), in: .rect(cornerRadius: 16))
                 Text("投屏").font(.system(size: 11)).foregroundStyle(secondaryOnDark)
+            }
+            let aid = model.detail?.aid ?? model.offline?.aid ?? model.card.id
+            tile("clock.badge.plus", "稍后再看") {
+                Task {
+                    do {
+                        try await WatchLater.add(aid: aid)
+                        ToastCenter.shared.show("已添加到稍后再看")
+                    } catch {
+                        ToastCenter.shared.show(error.localizedDescription)
+                    }
+                }
+            }
+            .disabled(aid <= 0)
+            if !model.card.bvid.isEmpty {
+                tile("square.and.arrow.up", "分享") {
+                    ShareCenter.shared.video(bvid: model.card.bvid, title: model.detail?.title ?? model.card.title)
+                }
             }
         }
     }

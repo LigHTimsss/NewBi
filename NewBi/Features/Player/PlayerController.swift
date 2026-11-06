@@ -64,6 +64,7 @@ final class PlayerController {
     var hasPreviousPart = false
     @ObservationIgnored var onRequestPart: ((Int) -> Void)?
     /// 整个视频播完（没有下一 P 可连播时）：连播队列用
+    @ObservationIgnored var onReplay: (() -> Void)?
     @ObservationIgnored var onEnded: (() -> Void)?
 
     /// 播放方式：播完之后做什么
@@ -92,11 +93,11 @@ final class PlayerController {
         }
     }
 
-    /// 本次启动内沿用上次选的播放方式（换视频不重置；不持久化，免得下次打开莫名一直循环）
-    private static var lastEndAction: EndAction = .next
+    private static let endActionKey = "playerEndAction"
     var endAction: EndAction {
-        didSet { Self.lastEndAction = endAction }
+        didSet { UserDefaults.standard.set(endAction.rawValue, forKey: Self.endActionKey) }
     }
+    @ObservationIgnored private var reachedEnd = false
 
     /// 实际播放速度（含长按临时倍速）
     var effectiveRate: Float { isBoosting ? boostRate : rate }
@@ -162,7 +163,7 @@ final class PlayerController {
     }
 
     init() {
-        endAction = Self.lastEndAction
+        endAction = UserDefaults.standard.string(forKey: Self.endActionKey).flatMap(EndAction.init(rawValue:)) ?? .next
         danmakuSettings = DanmakuSettings.load()
         engine = AVPlayerEngine()
         danmaku.settings = danmakuSettings
@@ -197,6 +198,7 @@ final class PlayerController {
         clock = nil
         sleepTask?.cancel()
         sleepTask = nil
+        onReplay = nil
         onEnded = nil
         onRequestPart = nil
         engine.teardown()
@@ -345,6 +347,7 @@ final class PlayerController {
             qualities = prepared.qualities
             switchEngine(to: stage.engine)
             itemWasReady = false
+            reachedEnd = false
             engine.load(url: prepared.url, headers: prepared.headers, startAt: time)
             // 已装载的这一项和它的时钟一起提交：进度上报只采样这里（不会把上一 P 的进度记到新 CID 上）
             playingCid = source.cid
@@ -486,10 +489,10 @@ final class PlayerController {
             }
             recover()
         case .ended:
+            reachedEnd = true
             switch endAction {
             case .loop:
-                seek(seconds: 0)
-                engine.play()
+                play()
                 return
             case .stop:
                 return
@@ -549,11 +552,17 @@ final class PlayerController {
 
     func togglePlay() {
         guard !isClosed else { return }
-        isPlaying ? engine.pause() : engine.play()
+        if reachedEnd || !engine.isPlaying { play() } else { pause() }
     }
 
     func play() {
         guard !isClosed else { return }
+        if reachedEnd {
+            reachedEnd = false
+            onReplay?()
+            currentTime = 0
+            engine.seek(to: 0)
+        }
         engine.play()
     }
 
@@ -568,6 +577,8 @@ final class PlayerController {
     func seek(seconds: Double) {
         guard duration > 0 else { return }
         let target = min(max(seconds, 0), duration)
+        if reachedEnd, target < duration { onReplay?() }
+        reachedEnd = target >= duration
         currentTime = target
         engine.seek(to: target)
         RemoteControl.shared.refresh(self)

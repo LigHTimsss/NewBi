@@ -42,6 +42,8 @@ struct FullscreenOverlay: View {
     /// 横屏为 compact；竖屏视频的竖屏全屏为 regular
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @FocusState private var inputFocused: Bool
+    @State private var keyboardFrame = CGRect.null
+    @State private var controlsFrame = CGRect.zero
     /// 长按临时 2 倍速：按住中，松手恢复原速
     @GestureState private var hold = Hold()
     @Environment(\.accent) private var accent
@@ -85,6 +87,7 @@ struct FullscreenOverlay: View {
 
             FullscreenPanelLayer(panel: $panel, model: model, close: { closePanel(then: $0) }, changed: scheduleHide)
         }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { controlsFrame = $0 }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
         .animation(Motion.micro, value: showControls)
@@ -216,8 +219,19 @@ struct FullscreenOverlay: View {
                     .padding(.top, 6)
             }
             .padding(.top, 10)
-            .padding(.bottom, 8)
+            .padding(.bottom, 8 + keyboardOverlap)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                keyboardFrame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect ?? .null
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardFrame = .null
+            }
         }
+    }
+
+    private var keyboardOverlap: CGFloat {
+        guard inputFocused, controlsFrame.intersects(keyboardFrame) else { return 0 }
+        return max(0, controlsFrame.maxY - keyboardFrame.minY)
     }
 
     private var topBar: some View {

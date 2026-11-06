@@ -383,10 +383,7 @@ struct VideoDetailView: View {
                     )
                 } else {
                     CompactOverlay(
-                        controller: model.player,
-                        card: model.card,
-                        // 从链接打开时卡片里没有标题，用详情里的
-                        shareTitle: model.detail?.title ?? model.card.title,
+                        model: model,
                         onBack: { VideoStage.shared.back() },
                         onFullscreen: { setFullscreen(true) }
                     )
@@ -439,6 +436,7 @@ struct VideoDetailView: View {
         let model = self.model
         let bvid = model.card.bvid
         // 只弱引用模型、不捕获视图（self）：否则 模型 → 播放器 → 回调 → 视图 → 模型 成环，关掉视频后永不释放
+        model.player.onReplay = { [weak model] in model?.upNext = nil }
         model.player.onEnded = { [weak model] in
             guard let model, let next = PlayQueue.shared.next(after: bvid) else { return }
             withAnimation(Motion.component) { model.upNext = next }
@@ -547,9 +545,9 @@ private struct PlayerStatusView: View {
 // MARK: - 竖屏小窗控件
 
 private struct CompactOverlay: View {
-    let controller: PlayerController
-    let card: VideoCard
-    var shareTitle: String
+    let model: VideoDetailModel
+    private var controller: PlayerController { model.player }
+    @State private var showMore = false
     var onBack: () -> Void
     var onFullscreen: () -> Void
     @State private var showControls = true
@@ -593,6 +591,18 @@ private struct CompactOverlay: View {
         }
         .gesture(seekGesture)
         .animation(Motion.micro, value: seekTarget == nil)
+        .sheet(isPresented: $showMore, onDismiss: scheduleHide) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) { MorePanel(model: model) }
+                    .padding(22)
+            }
+            .preferredColorScheme(.dark)
+            .foregroundStyle(.white)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .overlay { SharePanelLayer() }
+            .toast(Binding(get: { ToastCenter.shared.message }, set: { ToastCenter.shared.message = $0 }))
+        }
         .onAppear { scheduleHide() }
     }
 
@@ -646,36 +656,8 @@ private struct CompactOverlay: View {
         }
     }
 
-    /// 右上角「更多」：稍后再看、分享
     private var moreMenu: some View {
-        Menu {
-            Button {
-                Task {
-                    do {
-                        try await WatchLater.add(aid: card.id)
-                        ToastCenter.shared.show("已添加到稍后再看")
-                    } catch {
-                        ToastCenter.shared.show(error.localizedDescription)
-                    }
-                }
-            } label: {
-                Label("稍后再看", systemImage: "clock.badge.plus")
-            }
-            if !card.bvid.isEmpty {
-                Button {
-                    ShareCenter.shared.video(bvid: card.bvid, title: shareTitle)
-                } label: {
-                    Label("分享", systemImage: "square.and.arrow.up")
-                }
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 16, weight: .medium))
-                .frame(width: 36, height: 36)
-                .contentShape(.circle)
-        }
-        .glassEffect(.clear.interactive(), in: .circle)
-        .accessibilityLabel("更多")
+        GlassCircleButton(systemImage: "ellipsis", label: "更多", size: 36, glass: .clear) { showMore = true }
     }
 
     private func scheduleHide() {

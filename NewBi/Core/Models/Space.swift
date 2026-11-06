@@ -125,6 +125,25 @@ struct SpaceVideo: Decodable, Identifiable, Sendable {
     }
 }
 
+struct SpaceTagResponse: Decodable, Sendable {
+    struct Card: Decodable, Sendable {
+        struct Tag: Decodable, Sendable {
+            let type: String?
+            let title: String?
+        }
+
+        let tags: [Tag]?
+        private enum CodingKeys: String, CodingKey { case tags = "space_tag" }
+    }
+
+    let card: Card?
+    var location: String? {
+        guard let title = card?.tags?.first(where: { $0.type == "location" })?.title?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
+        return title.hasPrefix("IP") ? title : "IP属地：\(title)"
+    }
+}
+
 /// /x/space/wbi/acc/info：名片接口没有的勋章信息（网页接口不返回 IP 属地，2026-11 实测）。字段都可能缺，全按可选解
 struct SpaceAccInfo: Decodable, Sendable {
     /// 成就勋章（勋章墙里展示的那一枚）

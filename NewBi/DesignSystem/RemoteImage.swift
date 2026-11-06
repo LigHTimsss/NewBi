@@ -9,7 +9,15 @@ final class ImageMemory: @unchecked Sendable {
     private let exact = NSCache<NSURL, UIImage>()
     /// 同一张图（去掉尺寸后缀）最近解码过的任意尺寸：要的尺寸还在路上时先拿它顶上
     /// （比如视频页的大封面先用卡片上那张小图，展开时画面不留白）
-    private let anySize = NSCache<NSString, UIImage>()
+    private final class Preview {
+        let image: UIImage
+        let cropped: Bool
+        init(_ image: UIImage, url: URL) {
+            self.image = image
+            cropped = url.lastPathComponent.contains("_1c.")
+        }
+    }
+    private let anySize = NSCache<NSString, Preview>()
 
     init() {
         exact.totalCostLimit = 80 * 1024 * 1024
@@ -26,14 +34,15 @@ final class ImageMemory: @unchecked Sendable {
         anySize.removeAllObjects()
     }
 
-    func anySize(for url: URL) -> UIImage? {
-        anySize.object(forKey: Self.base(url))
+    func anySize(for url: URL, allowCropped: Bool = true) -> UIImage? {
+        guard let preview = anySize.object(forKey: Self.base(url)), allowCropped || !preview.cropped else { return nil }
+        return preview.image
     }
 
     func store(_ image: UIImage, for url: URL) {
         let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
         exact.setObject(image, forKey: url as NSURL, cost: cost)
-        anySize.setObject(image, forKey: Self.base(url), cost: cost)
+        anySize.setObject(Preview(image, url: url), forKey: Self.base(url), cost: cost)
     }
 
     /// 同一张图的「任意尺寸」键：B 站图去掉 `@…` 尺寸后缀；本地文件去掉 `#宽x高` 尺寸标记
@@ -208,6 +217,7 @@ struct RemoteImage: View {
     let size: CGSize
     /// true 裁切铺满（列表封面）；false 完整显示（大图查看）
     var fill = true
+    var cropOnServer = true
     var background: Color = Theme.card
     @State private var loaded: Loaded?
     @Environment(\.displayScale) private var scale
@@ -218,7 +228,7 @@ struct RemoteImage: View {
     }
 
     var body: some View {
-        let request = Self.request(url, size: size, scale: scale, fill: fill)
+        let request = Self.request(url, size: size, scale: scale, fill: fill && cropOnServer)
         let memory = ImageMemory.shared
         let shown = image(for: request)
         background
@@ -245,7 +255,7 @@ struct RemoteImage: View {
     private func image(for request: URL?) -> UIImage? {
         if let loaded, loaded.url == request { return loaded.image }
         guard let request else { return nil }
-        return ImageMemory.shared.image(for: request) ?? ImageMemory.shared.anySize(for: request)
+        return ImageMemory.shared.image(for: request) ?? ImageMemory.shared.anySize(for: request, allowCropped: fill)
     }
 
     /// 实际请求的地址（服务端按像素裁好）：显示和预取用同一套规则，才能命中同一份缓存

@@ -25,6 +25,8 @@ final class SpaceModel {
     private(set) var profile: SpaceCard?
     /// 粉丝勋章、成就勋章（拿不到时不显示，不影响页面）
     private(set) var accInfo: SpaceAccInfo?
+    private(set) var location: String?
+    @ObservationIgnored private var locationLoaded = false
     /// 投稿里搜索的关键词（空为不搜）
     private(set) var keyword = ""
     private(set) var topVideo: VideoCard?
@@ -78,6 +80,15 @@ final class SpaceModel {
             favoritesError = nil
         } catch {
             favoritesError = error.localizedDescription
+        }
+    }
+
+    func loadLocation() async {
+        guard !locationLoaded else { return }
+        if let tags = try? await BiliClient.shared.get(.spaceTags(mid: mid), as: SpaceTagResponse.self),
+           !Task.isCancelled {
+            location = tags.location
+            locationLoaded = true
         }
     }
 
@@ -226,6 +237,7 @@ struct SpaceView: View {
         .toolbar(.hidden, for: .navigationBar)
         .toast($toast)
         .task { await model.load() }
+        .task(id: model.mid) { await model.loadLocation() }
     }
 
     // MARK: 顶栏：返回 / 收起后的名字 / 分享
@@ -294,8 +306,14 @@ struct SpaceView: View {
                         .background(Theme.background, in: .circle)
                     VStack(spacing: 10) {
                         HStack {
-                            stat(model.followerCount, "粉丝")
-                            stat(card.attention, "关注")
+                            NavigationLink(value: Route.relations(mid: model.mid, kind: .followers)) {
+                                stat(model.followerCount, "粉丝").contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                            NavigationLink(value: Route.relations(mid: model.mid, kind: .followings)) {
+                                stat(card.attention, "关注").contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
                             stat(profile.likeNum ?? 0, "获赞")
                         }
                         HStack(spacing: 8) {
@@ -333,7 +351,7 @@ struct SpaceView: View {
                     }
                 }
 
-                // UID（点按复制）。IP 属地只有官方 App 接口给，网页接口（acc/info、card）都没有这个字段
+                // 服务端提供属地标签时展示在 UID 旁。
                 HStack(spacing: 12) {
                     Button {
                         UIPasteboard.general.string = "\(model.mid)"
@@ -342,6 +360,7 @@ struct SpaceView: View {
                         Text("UID:\(String(model.mid))")
                     }
                     .buttonStyle(.plain)
+                    if let location = model.location { Text(location) }
                 }
                 .font(.system(size: 12))
                 .monospacedDigit()

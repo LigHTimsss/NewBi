@@ -205,6 +205,7 @@ final class SearchModel {
 /// 搜索页：从底部搜索按钮进入
 struct SearchView: View {
     @State private var model = SearchModel()
+    @State private var entryComplete = false
     @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -212,7 +213,12 @@ struct SearchView: View {
         VStack(spacing: 0) {
             searchBar
             switch model.phase {
-            case .idle: IdleContent(model: model)
+            case .idle:
+                if entryComplete {
+                    IdleContent(model: model)
+                } else {
+                    Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             case .suggesting: suggestionList
             case .results: SearchResults(model: model)
             }
@@ -224,7 +230,8 @@ struct SearchView: View {
         .onAppear {
             if model.submitted == nil { focused = true }
         }
-        .task { await model.loadHot() }
+        .background { SearchEntryObserver { entryComplete = true }.frame(width: 0, height: 0) }
+        .task(id: entryComplete) { if entryComplete { await model.loadHot() } }
     }
 
     private var searchBar: some View {
@@ -295,6 +302,27 @@ struct SearchView: View {
         }
         .scrollDismissesKeyboard(.immediately)
         .transition(.opacity)
+    }
+}
+
+/// 输入框跟随导航出现并立即接收输入；推入完成后再布局历史标签和热搜。
+private struct SearchEntryObserver: UIViewControllerRepresentable {
+    let appeared: () -> Void
+
+    func makeUIViewController(context: Context) -> Observer {
+        let observer = Observer()
+        observer.appeared = appeared
+        return observer
+    }
+
+    func updateUIViewController(_ observer: Observer, context: Context) { observer.appeared = appeared }
+
+    final class Observer: UIViewController {
+        var appeared: (() -> Void)?
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            appeared?()
+        }
     }
 }
 
