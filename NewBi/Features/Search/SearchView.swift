@@ -227,10 +227,15 @@ struct SearchView: View {
         .toolbar(.hidden, for: .navigationBar)
         .animation(Motion.component, value: model.phase)
         .onChange(of: model.query) { model.queryChanged() }
-        .onAppear {
-            if model.submitted == nil { focused = true }
+        .background {
+            SearchEntryObserver {
+                guard !entryComplete else { return }
+                entryComplete = true
+                // 系统键盘第一次安装输入法时开销较大，等导航推入结束再自动聚焦。
+                if model.submitted == nil { focused = true }
+            }
+            .frame(width: 0, height: 0)
         }
-        .background { SearchEntryObserver { entryComplete = true }.frame(width: 0, height: 0) }
         .task(id: entryComplete) { if entryComplete { await model.loadHot() } }
     }
 

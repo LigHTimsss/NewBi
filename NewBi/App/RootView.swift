@@ -113,7 +113,7 @@ struct RootView: View {
         .accessibilityHidden(VideoStage.shared.coversApp)
         .overlay {
             StageView(capsuleLift: path.isEmpty ? 72 : 8)
-                .animation(Motion.component, value: path.isEmpty)
+                .animation(VideoStage.shared.showsMini ? Motion.component : nil, value: path.isEmpty)
                 .environment(\.openRoute, { route in
                     VideoStage.shared.makeRoom()
                     path.append(route)
