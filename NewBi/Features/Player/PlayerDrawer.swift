@@ -32,21 +32,17 @@ struct PlayerDrawer: View {
     }
 
     private var drawer: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                switch panel {
-                case .danmaku: DanmakuPanel(controller: controller)
-                case .quality: QualityPanel(controller: controller, onClose: onClose)
-                case .speed: SpeedPanel(controller: controller, onClose: onClose)
-                case .more: MorePanel(controller: controller)
-                case .parts: PartsPanel(model: model)
-                // 评论有自己的浮窗（FullscreenOverlay 里的 CommentsPanel），不走抽屉
-                case .comments: EmptyView()
+        Group {
+            if panel == .speed {
+                // 五档都放得下时用普通按钮列。按实际可用高度决定，较矮的窗口仍能滚到最后一档。
+                ViewThatFits(in: .vertical) {
+                    contents.fixedSize(horizontal: false, vertical: true)
+                    ScrollView { contents }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                ScrollView { contents }
             }
-            .padding(.leading, narrow ? 14 : 22)
-            .padding(.trailing, narrow ? 14 : 16)
-            .padding(.vertical, 22)
         }
         .scrollIndicators(.hidden)
         .frame(width: width)
@@ -58,6 +54,22 @@ struct PlayerDrawer: View {
                 .overlay(alignment: .leading) { Rectangle().fill(.white.opacity(0.12)).frame(width: 0.5) }
                 .ignoresSafeArea()
         }
+    }
+
+    private var contents: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            switch panel {
+            case .danmaku: DanmakuPanel(controller: controller)
+            case .quality: QualityPanel(controller: controller, onClose: onClose)
+            case .speed: SpeedPanel(controller: controller, onClose: onClose)
+            case .more: MorePanel(controller: controller)
+            case .parts: PartsPanel(model: model)
+            case .comments: EmptyView()
+            }
+        }
+        .padding(.leading, narrow ? 14 : 22)
+        .padding(.trailing, narrow ? 14 : 16)
+        .padding(.vertical, 22)
     }
 }
 
@@ -408,6 +420,7 @@ private struct QualityPanel: View {
 
 /// 倍速：竖排一列，从快到慢；选中立即生效，面板不自动收起
 private struct SpeedPanel: View {
+    private static let options = PlayerController.speeds.reversed().map { (rate: $0, title: $0.speedLabel) }
     let controller: PlayerController
     var onClose: (@escaping @MainActor () -> Void) -> Void
     @Environment(\.accent) private var accent
@@ -415,12 +428,12 @@ private struct SpeedPanel: View {
     var body: some View {
         PanelTitle("倍速")
         VStack(spacing: 6) {
-            ForEach(PlayerController.speeds.reversed(), id: \.self) { speed in
-                let on = speed == controller.rate
+            ForEach(Self.options, id: \.rate) { option in
+                let on = option.rate == controller.rate
                 Button {
-                    controller.setRate(speed)
+                    controller.setRate(option.rate)
                 } label: {
-                    Text(speed.speedLabel)
+                    Text(verbatim: option.title)
                         .font(.system(size: 15, weight: on ? .semibold : .medium))
                         .monospacedDigit()
                         .foregroundStyle(on ? accent : .white)

@@ -25,6 +25,7 @@ final class AVPlayerEngine: PlaybackEngine {
         videoView.playerLayer.videoGravity = .resizeAspect
         if AVPictureInPictureController.isPictureInPictureSupported() {
             pip = AVPictureInPictureController(playerLayer: videoView.playerLayer)
+            pip?.delegate = videoView
             applyAutoPictureInPicture()
             // 播放中在设置里改了开关：立即生效，不用重开视频
             defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -136,6 +137,7 @@ final class AVPlayerEngine: PlaybackEngine {
     }
 
     func teardown() {
+        pip?.delegate = nil
         removeItemObservers()
         if let defaultsObserver {
             NotificationCenter.default.removeObserver(defaultsObserver)
@@ -165,7 +167,29 @@ final class AVPlayerEngine: PlaybackEngine {
     }
 }
 
-final class VideoLayerView: UIView {
+final class VideoLayerView: UIView, AVPictureInPictureControllerDelegate {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping @Sendable (Bool) -> Void
+    ) {
+        Task { @MainActor [weak self] in
+            guard let window = self?.window, let scene = window.windowScene else {
+                completionHandler(false)
+                return
+            }
+            // 舞台保留了原来的播放界面；若场景仍在切换，激活时会再次应用方向。
+            Orientation.restore(in: scene)
+            window.layoutIfNeeded()
+            completionHandler(true)
+        }
+    }
+
+    nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        Task { @MainActor [weak self] in
+            if let scene = self?.window?.windowScene { Orientation.restore(in: scene) }
+        }
+    }
 }

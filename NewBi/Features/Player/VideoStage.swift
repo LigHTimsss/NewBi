@@ -52,7 +52,18 @@ final class VideoStage {
     /// 被舞台盖住的卡片封面（展开中、收回卡片的途中隐藏，就像被「拿起来」了）
     private(set) var hiddenSource: VideoSource?
     /// 视频页横屏全屏时不能收起
-    var isFullscreen = false
+    enum FullscreenMode { case portrait, landscape }
+    private(set) var fullscreenMode: FullscreenMode?
+    var isFullscreen: Bool { fullscreenMode != nil }
+
+    func setFullscreen(_ mode: FullscreenMode?, preferred: UIInterfaceOrientationMask? = nil) {
+        fullscreenMode = mode
+        if mode == .landscape {
+            Orientation.lock(.landscape, preferred: preferred ?? .landscapeRight)
+        } else {
+            Orientation.lock(.portrait)
+        }
+    }
 
     @ObservationIgnored private var source: VideoSource?
     /// 在视频页里点相关推荐：原地换视频，返回键先回到上一个
@@ -177,7 +188,7 @@ final class VideoStage {
     /// 视频页里点了 UP 主、评论头像等要进别的页面：先收进胶囊（不管在不在播），回来点胶囊就行
     func makeRoom() {
         guard model != nil, !isMinimized else { return }
-        isFullscreen = false
+        if isFullscreen { setFullscreen(nil) }
         collapse(toCapsule: true)
     }
 
@@ -208,7 +219,7 @@ final class VideoStage {
         drag = .zero
         fade = 1
         miniShift = 0
-        isFullscreen = false
+        if isFullscreen { setFullscreen(nil) }
         dragKind = nil
         miniAxis = nil
         BackGesture.shared.isBlocked = false
@@ -223,6 +234,7 @@ final class VideoStage {
 
     private func swap(to card: VideoCard, pinnedCid: Int? = nil, remember: Bool) {
         guard let current = model else { return }
+        if isFullscreen { setFullscreen(nil) }
         if remember { history.append(current.card) }
         current.player.pause()
         current.flushProgress()

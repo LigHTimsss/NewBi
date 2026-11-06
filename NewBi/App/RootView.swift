@@ -139,6 +139,9 @@ struct RootView: View {
             }
         })
         .sensoryFeedback(.selection, trigger: tab)
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { note in
+            if let scene = note.object as? UIWindowScene { Orientation.restore(in: scene) }
+        }
         .toast(
             Binding(get: { ToastCenter.shared.message }, set: { ToastCenter.shared.message = $0 }),
             bottomPadding: VideoStage.shared.showsMini ? 176 : 110

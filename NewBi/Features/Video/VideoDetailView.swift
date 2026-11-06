@@ -271,9 +271,8 @@ struct VideoDetailView: View {
     @State private var tab = 0
     /// 简介 → 评论的横滑进度 0…1，Tab 下划线跟手
     @State private var pageProgress: CGFloat = 0
-    @State private var isFullscreen = false
-    /// 竖屏视频的全屏：界面保持竖屏
-    @State private var portraitFullscreen = false
+    private var isFullscreen: Bool { VideoStage.shared.isFullscreen }
+    @State private var lastDeviceOrientation: UIDeviceOrientation = .unknown
     @State private var locked = false
     /// 在画面上下拉收起：只认从画面里（进度条以上）开始的竖向拖动
     @State private var pulling: Bool?
@@ -322,10 +321,6 @@ struct VideoDetailView: View {
         // 收起后模型由舞台持有（迷你胶囊）；关掉 / 换走时舞台调用 model.close() 显式收尾
         .onDisappear {
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
-            if isFullscreen {
-                Orientation.lock(.portrait)
-                VideoStage.shared.isFullscreen = false
-            }
         }
         .toast(Binding(get: { model.resumeHint }, set: { model.resumeHint = $0 }), bottomPadding: 40)
         .sheet(isPresented: $showFavorite) {
@@ -352,6 +347,7 @@ struct VideoDetailView: View {
             followDeviceOrientation()
         }
         .onChange(of: scenePhase) { _, phase in
+            if phase == .active { lastDeviceOrientation = UIDevice.current.orientation }
             guard phase == .background else { return }
             model.flushProgress()
             guard !backgroundPlay, !model.player.isPictureInPictureActive else { return }
@@ -467,25 +463,23 @@ struct VideoDetailView: View {
 
     /// - Parameter preferred: 横过手机进入全屏时转到的方向；点全屏按钮时为 nil（竖屏视频保持竖屏全屏）
     private func setFullscreen(_ on: Bool, preferred: UIInterfaceOrientationMask? = nil) {
+        guard VideoStage.shared.model === model else { return }
+        lastDeviceOrientation = UIDevice.current.orientation
         if !on { locked = false }
-        portraitFullscreen = on && preferred == nil && isVerticalVideo
-        isFullscreen = on
-        // 全屏里不能收起（左右滑是拖进度）
-        VideoStage.shared.isFullscreen = on
-        if on, !portraitFullscreen {
-            Orientation.lock(.landscape, preferred: preferred ?? .landscapeRight)
-        } else {
-            Orientation.lock(.portrait)
-        }
+        let mode: VideoStage.FullscreenMode = preferred == nil && isVerticalVideo ? .portrait : .landscape
+        VideoStage.shared.setFullscreen(on ? mode : nil, preferred: preferred)
     }
 
     private func followDeviceOrientation() {
-        guard !locked, !model.player.isMinimized else { return }
+        guard scenePhase == .active, !locked, !model.player.isMinimized,
+              !model.player.isPictureInPictureActive else { return }
         let device = UIDevice.current.orientation
+        guard device == .portrait || device.isLandscape, device != lastDeviceOrientation else { return }
+        lastDeviceOrientation = device
         // 竖屏视频横过手机不自动进横屏全屏；竖屏全屏时手机竖着也不退出
         if let mask = Orientation.interfaceMask(for: device), !isFullscreen, !isVerticalVideo {
             setFullscreen(true, preferred: mask)
-        } else if device == .portrait, isFullscreen, !portraitFullscreen {
+        } else if device == .portrait, VideoStage.shared.fullscreenMode == .landscape {
             setFullscreen(false)
         }
     }
