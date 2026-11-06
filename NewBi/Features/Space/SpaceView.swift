@@ -216,7 +216,7 @@ struct SpaceView: View {
                         // 左右滑切到相邻的 Tab：往左滑是下一个，往右滑是上一个，内容跟着从对应一侧推进来
                         .transition(.push(from: swipeForward ? .trailing : .leading))
                         .contentShape(.rect)
-                        .highPriorityGesture(SpaceTabPan(onSwipe: switchTab))
+                        .gesture(SpaceTabPan(onSwipe: switchTab))
                 }
                 .padding(.bottom, 40)
             }
