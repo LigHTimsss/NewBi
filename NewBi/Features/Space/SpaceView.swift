@@ -174,11 +174,12 @@ final class SpaceModel {
 struct SpaceView: View {
     @State private var model: SpaceModel
     @State private var tab: SpaceModel.Tab = .home
-    @State private var pageHeights: [SpaceModel.Tab: CGFloat] = [:]
-    @State private var viewportHeight: CGFloat = 1
+    @State private var headerHeight: CGFloat = 0
+    @State private var restingHeaderOffset: CGFloat = 0
+    @State private var visited: Set<SpaceModel.Tab> = []
     @State private var signExpanded = false
     @State private var collapsed = false
-    @State private var tabBarMinY: CGFloat = .infinity
+    @State private var tabPinned = false
     @State private var topInset: CGFloat = 0
     @State private var toast: String?
     /// 搜 TA 的投稿
@@ -192,35 +193,17 @@ struct SpaceView: View {
     init(mid: Int, initialTab: SpaceModel.Tab = .videos) {
         _model = State(initialValue: SpaceModel(mid: mid))
         _tab = State(initialValue: initialTab)
+        _visited = State(initialValue: [initialTab])
     }
 
     /// 顶栏底边（全局坐标）：Tab 栏滚到这里就吸顶
     private var topBarBottom: CGFloat { topInset + 52 }
-    private var tabPinned: Bool { tabBarMinY <= topBarBottom }
+    private var pinOffset: CGFloat { max(0, headerHeight + 12 - topBarBottom) }
 
     var body: some View {
         ZStack(alignment: .top) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    SpaceBanner(url: model.profile?.space?.lImg)
-                    profile
-                    tabBar
-                        .opacity(tabPinned ? 0 : 1)
-                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { tabBarMinY = $0 }
-                        .padding(.vertical, 12)
-                    if tab == .videos || tab == .dynamic, searching || !model.keyword.isEmpty || !model.dynamics.keyword.isEmpty {
-                        searchBar.transition(.opacity)
-                    }
-                    tabPager
-                }
-                .padding(.bottom, 40)
-            }
-            .ignoresSafeArea(edges: .top)
-            // 下拉刷新：资料 + 当前这个 Tab 的内容
-            .refreshable { await model.refresh(tab) }
-            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y > 150 } action: { _, value in
-                withAnimation(Motion.micro) { collapsed = value }
-            }
+            tabPager
+                .ignoresSafeArea(edges: .top)
 
             VStack(spacing: 8) {
                 topBar
@@ -229,7 +212,6 @@ struct SpaceView: View {
                 }
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = max(1, $0) }
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
         .background(Theme.background)
         .toolbar(.hidden, for: .navigationBar)
@@ -464,32 +446,83 @@ struct SpaceView: View {
     }
 
     private var tabPager: some View {
-        ScrollView(.horizontal) {
-            LazyHStack(alignment: .top, spacing: 0) {
-                ForEach(SpaceModel.Tab.allCases, id: \.self) { page in
-                    tabContent(for: page)
-                        .containerRelativeFrame(.horizontal)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { height in
-                            if pageHeights[page] != height { pageHeights[page] = height }
+        GeometryReader { viewport in
+            ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(SpaceModel.Tab.allCases, id: \.self) { page in
+                        SpacePageScroll(
+                            active: page == tab,
+                            pinOffset: pinOffset,
+                            restingHeaderOffset: $restingHeaderOffset,
+                            report: { pinned, compact in
+                                tabPinned = pinned
+                                if collapsed != compact {
+                                    withAnimation(Motion.micro) { collapsed = compact }
+                                }
+                            }
+                        ) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                pageHeader(for: page)
+                                VStack(alignment: .leading, spacing: 0) {
+                                    if page == tab, page == .videos || page == .dynamic,
+                                       searching || !model.keyword.isEmpty || !model.dynamics.keyword.isEmpty {
+                                        searchBar
+                                    }
+                                    if visited.contains(page) {
+                                        tabContent(for: page)
+                                    }
+                                }
+                                .padding(.bottom, 40)
+                                .frame(minHeight: max(0, viewport.size.height - topBarBottom), alignment: .top)
+                            }
                         }
-                        .frame(minHeight: viewportHeight, alignment: .top)
+                        .refreshable { await model.refresh(page) }
+                        .frame(width: viewport.size.width, height: viewport.size.height)
+                        .clipped()
                         .id(page)
+                    }
                 }
+                .scrollTargetLayout()
             }
-            .scrollTargetLayout()
+            .scrollIndicators(.hidden)
+            .coordinateSpace(name: "space-horizontal-pager")
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: Binding(
+                get: { Optional(tab) },
+                set: { page in
+                    guard let page, page != tab else { return }
+                    searchFocused = false
+                    tab = page
+                }
+            ))
+            .onChange(of: tab, initial: true) { _, selected in
+                let tabs = SpaceModel.Tab.allCases
+                guard let index = tabs.firstIndex(of: selected) else { return }
+                visited.formUnion(tabs[max(0, index - 1)...min(tabs.count - 1, index + 1)])
+            }
         }
-        .scrollIndicators(.hidden)
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: Binding(
-            get: { Optional(tab) },
-            set: { page in
-                guard let page, page != tab else { return }
-                searchFocused = false
-                tab = page
+    }
+
+    @ViewBuilder
+    private func pageHeader(for page: SpaceModel.Tab) -> some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                SpaceBanner(url: model.profile?.space?.lImg)
+                profile
             }
-        ))
-        .frame(height: max(viewportHeight, pageHeights[tab] ?? 0), alignment: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                if page == tab { headerHeight = height }
+            }
+            tabBar
+                .opacity(tabPinned ? 0 : 1)
+                .allowsHitTesting(!tabPinned)
+                .accessibilityHidden(tabPinned)
+                .padding(.vertical, 12)
+        }
+        // 横滑只移动正文；各页裁剪出同一个头图的对应部分。
+        .visualEffect { header, geometry in
+            header.offset(x: -geometry.frame(in: .named("space-horizontal-pager")).minX)
+        }
     }
 
     @ViewBuilder
@@ -501,6 +534,45 @@ struct SpaceView: View {
         case .seasons: SpaceSeasons(model: model)
         case .favorites: SpaceFavorites(model: model)
         }
+    }
+}
+
+/// 每个标签持有自己的纵向位置。横向容器只使用屏幕尺寸。
+private struct SpacePageScroll<Content: View>: View {
+    let active: Bool
+    let pinOffset: CGFloat
+    @Binding var restingHeaderOffset: CGFloat
+    let report: (Bool, Bool) -> Void
+    @ViewBuilder var content: Content
+    @State private var position = ScrollPosition(edge: .top)
+    @State private var deep = false
+    @State private var compact = false
+    @State private var hasReadingPosition = false
+
+    var body: some View {
+        ScrollView { content }
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: Int.self) { geometry in
+                let y = geometry.contentOffset.y + geometry.contentInsets.top
+                return (pinOffset > 0 && y >= pinOffset - 1 ? 1 : 0) + (y > 150 ? 2 : 0)
+            } action: { _, flags in
+                deep = flags & 1 != 0
+                compact = flags & 2 != 0
+                if active { report(deep, compact) }
+            }
+            .onScrollPhaseChange { _, phase, context in
+                guard active, phase == .idle else { return }
+                let y = context.geometry.contentOffset.y + context.geometry.contentInsets.top
+                hasReadingPosition = y > pinOffset + 1
+                restingHeaderOffset = min(max(0, y), pinOffset)
+            }
+            .onChange(of: restingHeaderOffset) { _, offset in
+                // 对齐邻页头图。已经读到深处的列表保留自己的位置。
+                if !active, !hasReadingPosition { position.scrollTo(y: offset) }
+            }
+            .onChange(of: active) { _, visible in
+                if visible { report(deep, compact) }
+            }
     }
 }
 
