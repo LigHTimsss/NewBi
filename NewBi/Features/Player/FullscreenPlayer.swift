@@ -588,6 +588,18 @@ private struct FullscreenPanelLayer: View {
     let close: ((@MainActor () -> Void)?) -> Void
     let changed: () -> Void
 
+    @State private var size = CGSize.zero
+    @State private var bottomInset: CGFloat = 0
+
+    /// 竖屏全屏（画面比宽高）时，这四个面板改成底部升起；选集、评论仍从右侧滑出
+    private func rises(_ panel: PlayerPanel) -> Bool {
+        guard size.height > size.width else { return false }
+        return switch panel {
+        case .danmaku, .more, .speed, .quality: true
+        case .parts, .comments: false
+        }
+    }
+
     var body: some View {
         ZStack {
             if panel != nil {
@@ -599,7 +611,7 @@ private struct FullscreenPanelLayer: View {
             }
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
-                if let panel {
+                if let panel, !rises(panel) {
                     Group {
                         if panel == .comments {
                             CommentsPanel(model: model.comments) { close(nil) }
@@ -614,7 +626,22 @@ private struct FullscreenPanelLayer: View {
                     .transition(.move(edge: .trailing))
                 }
             }
+            // 竖屏全屏：弹幕设置、更多、倍速、画质从底部升起，铺满屏宽；高度随内容，最多到屏高的 58%
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                if let panel, rises(panel) {
+                    PlayerDrawer(
+                        panel: panel, controller: model.player, model: model,
+                        sheet: true, maxHeight: size.height * 0.58, bottomInset: bottomInset
+                    ) { close($0) }
+                    .transition(.move(edge: .bottom))
+                }
+            }
+            // 面板贴到屏幕最底下，Home 条的空间由面板内容自己让出来
+            .ignoresSafeArea(edges: .bottom)
         }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomInset = $0 }
         .onChange(of: panel) { changed() }
     }
 }

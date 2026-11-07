@@ -3,11 +3,17 @@ import AVKit
 
 private let secondaryOnDark = Color.white.opacity(0.62)
 
-/// 全屏右侧玻璃抽屉：弹幕设置 / 画质 / 倍速 / 更多 / 选集
+/// 全屏右侧玻璃抽屉：弹幕设置 / 画质 / 倍速 / 更多 / 选集。
+/// 竖屏全屏时弹幕设置、更多、倍速、画质改成从底部升起的面板（`sheet`）
 struct PlayerDrawer: View {
     let panel: PlayerPanel
     let controller: PlayerController
     let model: VideoDetailModel
+    /// 底部面板：屏宽、顶部圆角、高度随内容，超过 `maxHeight` 才滚动
+    var sheet = false
+    var maxHeight: CGFloat = .infinity
+    /// 底部面板铺到屏幕最底下，内容自己让开 Home 条
+    var bottomInset: CGFloat = 0
     /// 收起抽屉，收起动画结束后执行传入的动作（换画质、改倍速）
     var onClose: (@escaping @MainActor () -> Void) -> Void
 
@@ -23,12 +29,38 @@ struct PlayerDrawer: View {
     private var narrow: Bool { panel == .speed || panel == .quality }
 
     var body: some View {
-        if narrow {
+        if sheet {
+            bottomSheet.geometryGroup()
+        } else if narrow {
             // 在固定宽度的抽屉边界解析滑动位移，文字、描边和材质一起移动。
             drawer.geometryGroup()
         } else {
             drawer
         }
+    }
+
+    private static let sheetShape = UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28, style: .continuous)
+
+    private var bottomSheet: some View {
+        // 内容放得下就按内容高度，放不下（弹幕设置）才在 maxHeight 内滚动
+        CappedHeight(max: maxHeight) {
+            ViewThatFits(in: .vertical) {
+                contents.fixedSize(horizontal: false, vertical: true)
+                ScrollView { contents }
+            }
+        }
+        .scrollIndicators(.hidden)
+        // iPhone 竖屏是整屏宽；iPad 上收到 560 居中
+        .frame(maxWidth: 560)
+        .background {
+            // 和右侧抽屉同一套材质和压暗色，描边换到顶边
+            Self.sheetShape
+                .fill(.ultraThinMaterial)
+                .overlay(Self.sheetShape.fill(Color(red: 14 / 255, green: 14 / 255, blue: 18 / 255).opacity(0.55)))
+                .overlay(Self.sheetShape.stroke(.white.opacity(0.12), lineWidth: 0.5))
+        }
+        .clipShape(Self.sheetShape)
+        .frame(maxWidth: .infinity)
     }
 
     private var drawer: some View {
@@ -60,16 +92,32 @@ struct PlayerDrawer: View {
         VStack(alignment: .leading, spacing: 0) {
             switch panel {
             case .danmaku: DanmakuPanel(controller: controller)
-            case .quality: QualityPanel(controller: controller, onClose: onClose)
-            case .speed: SpeedPanel(controller: controller, onClose: onClose)
+            case .quality: QualityPanel(controller: controller, grid: sheet, onClose: onClose)
+            case .speed: SpeedPanel(controller: controller, row: sheet, onClose: onClose)
             case .more: MorePanel(model: model)
             case .parts: PartsPanel(model: model)
             case .comments: EmptyView()
             }
         }
-        .padding(.leading, narrow ? 14 : 22)
-        .padding(.trailing, narrow ? 14 : 16)
-        .padding(.vertical, 22)
+        .padding(.leading, sheet ? 20 : narrow ? 14 : 22)
+        .padding(.trailing, sheet ? 20 : narrow ? 14 : 16)
+        .padding(.top, sheet ? 14 : 22)
+        .padding(.bottom, sheet ? 14 + bottomInset : 22)
+    }
+}
+
+/// 把子视图的高度上限压到 `max`，但大小仍跟着子视图走。
+/// `.frame(maxHeight:)` 在父视图给的高度更大时会直接撑到上限，底部面板就总是一样高
+private struct CappedHeight: Layout {
+    var max: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let height = min(proposal.height ?? max, max)
+        return subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: height)) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 }
 
@@ -360,6 +408,8 @@ private struct TrailingIconLabelStyle: LabelStyle {
 
 private struct QualityPanel: View {
     let controller: PlayerController
+    /// 竖屏底部面板：两列方块，屏宽下一列一档太空、太长
+    var grid = false
     var onClose: (@escaping @MainActor () -> Void) -> Void
     @Environment(\.accent) private var accent
 
@@ -368,37 +418,13 @@ private struct QualityPanel: View {
         if controller.qualities.isEmpty {
             ProgressView().frame(maxWidth: .infinity)
         }
-        LazyVStack(spacing: 2) {
-            ForEach(controller.qualities) { option in
-                let on = option.id == controller.quality
-                Button {
-                    // 选了立即生效，面板留着，由用户自己收起
-                    Task { await controller.changeQuality(option.id) }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(option.name).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity, alignment: .leading)
-                        if option.needsVIP || !option.available {
-                            // 拿不到的档位：大会员档标「大会员」，其余多为未登录限制
-                            Text(option.needsVIP ? "大会员" : "登录")
-                                .font(.system(size: 10, weight: .semibold))
-                                .padding(.horizontal, 5)
-                                .frame(height: 16)
-                                .overlay { RoundedRectangle(cornerRadius: 4).stroke(lineWidth: 1) }
-                                .opacity(0.85)
-                        }
-                    }
-                    .font(.system(size: 15, weight: on ? .semibold : .regular))
-                    .foregroundStyle(on ? accent : .white)
-                    .opacity(option.available ? 1 : 0.4)
-                    .padding(.horizontal, 14)
-                    .frame(height: 42)
-                    .background(on ? Color.white.opacity(0.1) : Color.clear, in: .rect(cornerRadius: 14))
-                    .contentShape(.rect)
-                }
-                .buttonStyle(PressableStyle())
-                .disabled(!option.available)
-                .accessibilityAddTraits(on ? .isSelected : [])
-                .accessibilityHint(option.available ? "" : "当前账号无法播放此画质")
+        if grid {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
+                ForEach(controller.qualities) { option(for: $0) }
+            }
+        } else {
+            LazyVStack(spacing: 2) {
+                ForEach(controller.qualities) { option(for: $0) }
             }
         }
         if let label = controller.streamLabel {
@@ -414,38 +440,65 @@ private struct QualityPanel: View {
             .foregroundStyle(secondaryOnDark)
             .padding(.top, 4)
     }
+
+    private func option(for option: QualityOption) -> some View {
+        let on = option.id == controller.quality
+        return Button {
+            // 选了立即生效，面板留着，由用户自己收起
+            Task { await controller.changeQuality(option.id) }
+        } label: {
+            HStack(spacing: 8) {
+                Text(option.name).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity, alignment: .leading)
+                if option.needsVIP || !option.available {
+                    // 拿不到的档位：大会员档标「大会员」，其余多为未登录限制
+                    Text(option.needsVIP ? "大会员" : "登录")
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .frame(height: 16)
+                        .overlay { RoundedRectangle(cornerRadius: 4).stroke(lineWidth: 1) }
+                        .opacity(0.85)
+                }
+            }
+            .font(.system(size: 15, weight: on ? .semibold : .regular))
+            .foregroundStyle(on ? accent : .white)
+            .opacity(option.available ? 1 : 0.4)
+            .padding(.horizontal, 14)
+            .frame(height: grid ? 46 : 42)
+            // 方块排布时每格都有底色，选中的更亮；列表排布只给选中的一行底色
+            .background(on ? Color.white.opacity(grid ? 0.16 : 0.1) : Color.white.opacity(grid ? 0.08 : 0), in: .rect(cornerRadius: 14))
+            .overlay {
+                if grid && on { RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.3), lineWidth: 0.5) }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(!option.available)
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityHint(option.available ? "" : "当前账号无法播放此画质")
+    }
 }
 
 // MARK: - 倍速
 
-/// 倍速：竖排一列，从快到慢；选中立即生效，面板不自动收起
+/// 倍速：横屏抽屉里竖排一列，从快到慢；竖屏底部面板里横排一行，从慢到快。
+/// 选中立即生效，面板不自动收起
 private struct SpeedPanel: View {
-    private static let options = PlayerController.speeds.reversed().map { (rate: $0, title: $0.speedLabel) }
+    private static let options = PlayerController.speeds.map { (rate: $0, title: $0.speedLabel) }
     let controller: PlayerController
+    /// 竖屏底部面板：五档排成一行
+    var row = false
     var onClose: (@escaping @MainActor () -> Void) -> Void
     @Environment(\.accent) private var accent
 
     var body: some View {
         PanelTitle("倍速")
-        VStack(spacing: 6) {
-            ForEach(Self.options, id: \.rate) { option in
-                let on = option.rate == controller.rate
-                Button {
-                    controller.setRate(option.rate)
-                } label: {
-                    Text(verbatim: option.title)
-                        .font(.system(size: 15, weight: on ? .semibold : .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(on ? accent : .white)
-                        .frame(maxWidth: .infinity, minHeight: 42)
-                        .background(.white.opacity(on ? 0.16 : 0.08), in: .rect(cornerRadius: 12))
-                        .overlay {
-                            if on { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.3), lineWidth: 0.5) }
-                        }
-                        .contentShape(.rect)
-                }
-                .buttonStyle(PressableStyle())
-                .accessibilityAddTraits(on ? .isSelected : [])
+        if row {
+            HStack(spacing: 8) {
+                ForEach(Self.options, id: \.rate) { button(for: $0, height: 48) }
+            }
+        } else {
+            VStack(spacing: 6) {
+                ForEach(Self.options.reversed(), id: \.rate) { button(for: $0, height: 42) }
             }
         }
         Text("播放中长按画面，临时 2 倍速")
@@ -453,6 +506,26 @@ private struct SpeedPanel: View {
             .foregroundStyle(secondaryOnDark)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 12)
+    }
+
+    private func button(for option: (rate: Float, title: String), height: CGFloat) -> some View {
+        let on = option.rate == controller.rate
+        return Button {
+            controller.setRate(option.rate)
+        } label: {
+            Text(verbatim: option.title)
+                .font(.system(size: 15, weight: on ? .semibold : .medium))
+                .monospacedDigit()
+                .foregroundStyle(on ? accent : .white)
+                .frame(maxWidth: .infinity, minHeight: height)
+                .background(.white.opacity(on ? 0.16 : 0.08), in: .rect(cornerRadius: 12))
+                .overlay {
+                    if on { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.3), lineWidth: 0.5) }
+                }
+                .contentShape(.rect)
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 
@@ -504,18 +577,34 @@ struct MorePanel: View {
                     .background(.white.opacity(0.08), in: .rect(cornerRadius: 16))
                 Text("投屏").font(.system(size: 11)).foregroundStyle(secondaryOnDark)
             }
-            let aid = model.detail?.aid ?? model.offline?.aid ?? model.card.id
-            tile("clock.badge.plus", "稍后再看") {
-                Task {
-                    do {
-                        try await WatchLater.add(aid: aid)
-                        ToastCenter.shared.show("已添加到稍后再看")
-                    } catch {
-                        ToastCenter.shared.show(error.localizedDescription)
-                    }
-                }
-            }
+            // 和其他七格同一套方块图标；加过之后换成打勾的钟、点亮成主题色
+            tile(
+                addedToWatchLater ? "clock.badge.checkmark" : "clock.badge.plus",
+                addedToWatchLater ? "已加稍后看" : "稍后再看", on: addedToWatchLater, action: addToWatchLater
+            )
             .disabled(aid <= 0)
+        }
+    }
+
+    @State private var addedToWatchLater = false
+
+    private var aid: Int { model.detail?.aid ?? model.offline?.aid ?? model.card.id }
+
+    private func addToWatchLater() {
+        // 加过了不再变灰（禁用态会把点亮的主题色压暗），再点只提示
+        guard !addedToWatchLater else {
+            ToastCenter.shared.show("已经在稍后再看里了")
+            return
+        }
+        let aid = aid
+        Task {
+            do {
+                try await WatchLater.add(aid: aid)
+                withAnimation(Motion.micro) { addedToWatchLater = true }
+                ToastCenter.shared.show("已添加到稍后再看")
+            } catch {
+                ToastCenter.shared.show(error.localizedDescription)
+            }
         }
     }
 
