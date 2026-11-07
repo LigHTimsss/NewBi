@@ -326,6 +326,15 @@ private struct SearchEntryObserver: UIViewControllerRepresentable {
         var appeared: (() -> Void)?
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
+            // 子控制器的 appear 可能早于导航容器转场结束，按容器的完成回调放行。
+            if let coordinator = transitionCoordinator ?? navigationController?.transitionCoordinator,
+               coordinator.isAnimated {
+                let registered = coordinator.animate(alongsideTransition: nil) { [weak self] context in
+                    guard !context.isCancelled, let self, viewIfLoaded?.window != nil else { return }
+                    appeared?()
+                }
+                if registered { return }
+            }
             appeared?()
         }
     }
