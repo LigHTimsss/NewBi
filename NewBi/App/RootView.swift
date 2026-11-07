@@ -29,49 +29,13 @@ enum Route: Hashable {
 /// 根视图：三个 Tab 横向平移切换（Flow 画板），底部为自定义玻璃导航。
 /// 单一 NavigationStack 包住整个 Tab 容器，进入详情页时导航栏自然被覆盖。
 struct RootView: View {
-    @State private var tab: AppTab = .home
     @State private var path = NavigationPath()
-    /// 递增即让动态页刷新：有红点时切过去、或在动态页再点一次「动态」
-    @State private var dynamicRefresh = 0
-    /// 正在滑出的页（可能连点了好几次），这一串切换的动画全部结束后清空
-    @State private var leaving: Set<AppTab> = []
-    @State private var switchID = 0
     @Environment(SessionStore.self) private var session
-    @Namespace private var searchTransition
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack(path: $path) {
-            GeometryReader { geo in
-                ZStack {
-                    ForEach(AppTab.allCases) { item in
-                        page(item)
-                            // 当前页和正在滑出的页照常；其余页停掉呼吸光轨（停的时候都在屏幕外，看不出来）
-                            .environment(\.pageActive, item == tab || leaving.contains(item))
-                            // 卡片位置按页面记：切页平移时不必每帧重算每张卡片
-                            .coverSpace()
-                            .miniPlayerInset(66)
-                            .frame(width: geo.size.width)
-                            .offset(x: CGFloat(item.rawValue - tab.rawValue) * geo.size.width)
-                            .allowsHitTesting(item == tab)
-                            .accessibilityHidden(item != tab)
-                    }
-                }
-            }
-            .background(Theme.background)
-            // 重新打开被隐藏导航栏关掉的侧滑返回
-            .background { BackGestureEnabler().frame(width: 0, height: 0) }
-            .overlay(alignment: .bottom) {
-                GlassTabBar(
-                    selection: tab,
-                    searchTransition: searchTransition,
-                    badges: DynamicBadge.shared.hasNew && tab != .dynamic ? [.dynamic] : [],
-                    onSelect: select
-                ) {
-                    path.append(Route.search)
-                }
-            }
-            .toolbar(.hidden, for: .navigationBar)
+            RootTabs(path: $path)
             .navigationDestination(for: Route.self) { route in
                 Group {
                     switch route {
@@ -114,7 +78,7 @@ struct RootView: View {
         .accessibilityHidden(VideoStage.shared.coversApp)
         .overlay {
             StageView(capsuleLift: path.isEmpty ? 72 : 8)
-                .animation(Motion.component, value: path.isEmpty)
+                .animation(VideoStage.shared.showsMini ? Motion.component : nil, value: path.isEmpty)
                 .environment(\.openRoute, { route in
                     VideoStage.shared.makeRoom()
                     path.append(route)
@@ -138,7 +102,9 @@ struct RootView: View {
                 return .systemAction
             }
         })
-        .sensoryFeedback(.selection, trigger: tab)
+        .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { note in
+            if let scene = note.object as? UIWindowScene { Orientation.restore(in: scene) }
+        }
         .toast(
             Binding(get: { ToastCenter.shared.message }, set: { ToastCenter.shared.message = $0 }),
             bottomPadding: VideoStage.shared.showsMini ? 176 : 110
@@ -159,6 +125,52 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await MessageBadge.shared.check(loggedIn: session.isLoggedIn) } }
         }
+    }
+
+}
+
+/// 根标签页单独持有界面状态。导航路径变化时，首页列表和玻璃底栏拥有独立的更新边界。
+private struct RootTabs: View {
+    @Binding var path: NavigationPath
+    @State private var tab: AppTab = .home
+    /// 递增即让动态页刷新：有红点时切过去、或在动态页再点一次「动态」
+    @State private var dynamicRefresh = 0
+    /// 正在滑出的页（可能连点了好几次），这一串切换的动画全部结束后清空
+    @State private var leaving: Set<AppTab> = []
+    @State private var switchID = 0
+
+    var body: some View {
+            GeometryReader { geo in
+                ZStack {
+                    ForEach(AppTab.allCases) { item in
+                        page(item)
+                            // 当前页和正在滑出的页照常；其余页停掉呼吸光轨（停的时候都在屏幕外，看不出来）
+                            .environment(\.pageActive, item == tab || leaving.contains(item))
+                            // 卡片位置按页面记：切页平移时不必每帧重算每张卡片
+                            .coverSpace()
+                            .miniPlayerInset(66)
+                            .frame(width: geo.size.width)
+                            .offset(x: CGFloat(item.rawValue - tab.rawValue) * geo.size.width)
+                            .allowsHitTesting(item == tab)
+                            .accessibilityHidden(item != tab)
+                    }
+                }
+            }
+            .background(Theme.background)
+            // 重新打开被隐藏导航栏关掉的侧滑返回
+            .background { BackGestureEnabler().frame(width: 0, height: 0) }
+            .overlay(alignment: .bottom) {
+                GlassTabBar(
+                    selection: tab,
+                    badges: DynamicBadge.shared.hasNew && tab != .dynamic ? [.dynamic] : [],
+                    onSelect: select
+                ) {
+                    path.append(Route.search)
+                }
+            }
+            .ignoresSafeArea(.keyboard)
+            .toolbar(.hidden, for: .navigationBar)
+            .sensoryFeedback(.selection, trigger: tab)
     }
 
     @ViewBuilder

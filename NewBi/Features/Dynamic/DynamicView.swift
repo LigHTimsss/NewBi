@@ -568,7 +568,7 @@ private struct ImageGrid: View {
     var body: some View {
         if images.count == 1, let image = images.first {
             Button { onTap(0) } label: {
-                RemoteImage(url: image.url, size: CGSize(width: 260, height: 260 / image.aspectRatio))
+                RemoteImage(url: image.url, size: CGSize(width: 260, height: 260 / image.aspectRatio), cropOnServer: false)
                     .aspectRatio(image.aspectRatio, contentMode: .fit)
                     .frame(maxWidth: image.aspectRatio < 1 ? 220 : 300)
                     .clipShape(.rect(cornerRadius: 12))
@@ -581,7 +581,7 @@ private struct ImageGrid: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: columns), spacing: 4) {
                 ForEach(Array(images.prefix(9).enumerated()), id: \.offset) { index, image in
                     Button { onTap(index) } label: {
-                        RemoteImage(url: image.url, size: CGSize(width: 180, height: 180))
+                        RemoteImage(url: image.url, size: CGSize(width: 180, height: 180), cropOnServer: false)
                             .aspectRatio(1, contentMode: .fit)
                             .clipShape(.rect(cornerRadius: 8))
                             .imageZoomSource(image.url)

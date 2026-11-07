@@ -177,7 +177,6 @@ enum AppTab: Int, CaseIterable, Identifiable {
 struct GlassTabBar: View {
     var selection: AppTab
     /// 搜索页从按钮放大展开（zoom 转场）
-    var searchTransition: Namespace.ID
     /// 显示红点的 Tab（动态有更新）
     var badges: Set<AppTab> = []
     var onSelect: (AppTab) -> Void
@@ -226,7 +225,6 @@ struct GlassTabBar: View {
                 }
                 .buttonStyle(PressableStyle())
                 .glassEffect(.regular.interactive(), in: .circle)
-                .matchedTransitionSource(id: "search", in: searchTransition)
                 .accessibilityLabel("搜索")
             }
         }

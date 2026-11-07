@@ -42,8 +42,8 @@ final class SearchModel {
     private var loading: Set<Kind> = []
     private var errors: [Kind: String] = [:]
 
-    var isLoading: Bool { loading.contains(kind) }
-    var error: String? { errors[kind] }
+    func isLoading(_ kind: Kind) -> Bool { loading.contains(kind) }
+    func error(for kind: Kind) -> String? { errors[kind] }
 
     var phase: Phase {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
@@ -51,7 +51,7 @@ final class SearchModel {
         return trimmed == submitted ? .results : .suggesting
     }
 
-    var hasMore: Bool { (pages[kind]?.next ?? 1) <= (pages[kind]?.total ?? 1) }
+    func hasMore(_ kind: Kind) -> Bool { (pages[kind]?.next ?? 1) <= (pages[kind]?.total ?? 1) }
 
     /// 每种结果各自的分页：下一页页码、总页数
     @ObservationIgnored private var pages: [Kind: (next: Int, total: Int)] = [:]
@@ -60,14 +60,29 @@ final class SearchModel {
     @ObservationIgnored private var suggestTask: Task<Void, Never>?
     @ObservationIgnored private var loadTasks: [Kind: Task<Void, Never>] = [:]
     private static let historyKey = "searchHistory"
+    private static var hotCache: (words: [HotWord], fetchedAt: Date)?
+    private static var hotRefresh: Task<[HotWord]?, Never>?
 
     init() {
         history = UserDefaults.standard.stringArray(forKey: Self.historyKey) ?? []
+        hot = Self.hotCache?.words ?? []
     }
 
     func loadHot() async {
-        guard hot.isEmpty else { return }
-        hot = (try? await BiliClient.shared.get(.searchSquare, as: SearchSquare.self).trending?.list) ?? []
+        if let cache = Self.hotCache, Date.now.timeIntervalSince(cache.fetchedAt) < 300 {
+            hot = cache.words
+            return
+        }
+        // 快速退出再进入时共用请求；页面退出后，成功的响应仍可供下一次使用。
+        let refresh = Self.hotRefresh ?? Task { @MainActor () -> [HotWord]? in
+            defer { Self.hotRefresh = nil }
+            guard let response = try? await BiliClient.shared.get(.searchSquare, as: SearchSquare.self),
+                  let words = response.trending?.list else { return nil }
+            Self.hotCache = (words, .now)
+            return words
+        }
+        Self.hotRefresh = refresh
+        if let words = await refresh.value, !Task.isCancelled { hot = words }
     }
 
     /// 输入变化：200ms 防抖后请求联想词
@@ -102,20 +117,21 @@ final class SearchModel {
         startLoad(kind, reset: true)
     }
 
-    func loadMore(after id: Int) {
+    func loadMore(after id: Int, in kind: Kind) {
+        guard self.kind == kind else { return }
         let lastID = kind == .video ? videos.last?.id : users.last?.id
         guard id == lastID else { return }
         startLoad(kind, reset: false)
     }
 
-    var isEmpty: Bool { kind == .video ? videos.isEmpty : users.isEmpty }
+    func isEmpty(_ kind: Kind) -> Bool { kind == .video ? videos.isEmpty : users.isEmpty }
 
-    func retry() {
+    func retry(_ kind: Kind) {
         startLoad(kind, reset: true)
     }
 
     /// 下拉刷新当前分类
-    func refresh() async {
+    func refresh(_ kind: Kind) async {
         startLoad(kind, reset: true)
         await loadTasks[kind]?.value
     }
@@ -186,9 +202,10 @@ final class SearchModel {
     }
 }
 
-/// 搜索页：从底部搜索按钮 zoom 展开
+/// 搜索页：从底部搜索按钮进入
 struct SearchView: View {
     @State private var model = SearchModel()
+    @State private var entryComplete = false
     @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -196,7 +213,12 @@ struct SearchView: View {
         VStack(spacing: 0) {
             searchBar
             switch model.phase {
-            case .idle: IdleContent(model: model)
+            case .idle:
+                if entryComplete {
+                    IdleContent(model: model)
+                } else {
+                    Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             case .suggesting: suggestionList
             case .results: SearchResults(model: model)
             }
@@ -205,12 +227,16 @@ struct SearchView: View {
         .toolbar(.hidden, for: .navigationBar)
         .animation(Motion.component, value: model.phase)
         .onChange(of: model.query) { model.queryChanged() }
-        .task {
-            // 等 zoom 转场结束再弹键盘，避免两段动画打架
-            try? await Task.sleep(for: .milliseconds(350))
-            if model.submitted == nil { focused = true }
-            await model.loadHot()
+        .background {
+            SearchEntryObserver {
+                guard !entryComplete else { return }
+                entryComplete = true
+                // 系统键盘第一次安装输入法时开销较大，等导航推入结束再自动聚焦。
+                if model.submitted == nil { focused = true }
+            }
+            .frame(width: 0, height: 0)
         }
+        .task(id: entryComplete) { if entryComplete { await model.loadHot() } }
     }
 
     private var searchBar: some View {
@@ -281,6 +307,36 @@ struct SearchView: View {
         }
         .scrollDismissesKeyboard(.immediately)
         .transition(.opacity)
+    }
+}
+
+/// 输入框跟随导航出现并立即接收输入；推入完成后再布局历史标签和热搜。
+private struct SearchEntryObserver: UIViewControllerRepresentable {
+    let appeared: () -> Void
+
+    func makeUIViewController(context: Context) -> Observer {
+        let observer = Observer()
+        observer.appeared = appeared
+        return observer
+    }
+
+    func updateUIViewController(_ observer: Observer, context: Context) { observer.appeared = appeared }
+
+    final class Observer: UIViewController {
+        var appeared: (() -> Void)?
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            // 子控制器的 appear 可能早于导航容器转场结束，按容器的完成回调放行。
+            if let coordinator = transitionCoordinator ?? navigationController?.transitionCoordinator,
+               coordinator.isAnimated {
+                let registered = coordinator.animate(alongsideTransition: nil) { [weak self] context in
+                    guard !context.isCancelled, let self, viewIfLoaded?.window != nil else { return }
+                    appeared?()
+                }
+                if registered { return }
+            }
+            appeared?()
+        }
     }
 }
 
@@ -369,43 +425,62 @@ private struct SearchResults: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12, pinnedViews: .sectionHeaders) {
-                Section {
-                    switch model.kind {
-                    case .video:
-                        ForEach(Array(model.videos.enumerated()), id: \.element.id) { index, video in
-                            VideoLink(card: video.card) {
-                                VideoRow(
-                                    card: video.card,
-                                    attributedTitle: BiliHTML.highlighted(video.titleHTML, color: accent.accentText(scheme)),
-                                    subtitle: "\(video.author) · \(video.play.biliCount)播放"
-                                )
-                            }
-                            .buttonStyle(PressableStyle())
-                            .watchLaterMenu(video.card)
-                            .onAppear { model.loadMore(after: video.id) }
-                        }
-                    case .user:
-                        ForEach(Array(model.users.enumerated()), id: \.element.id) { index, user in
-                            NavigationLink(value: Route.space(mid: user.mid)) { UserRow(user: user) }
-                                .buttonStyle(PressableStyle())
-                                .foregroundStyle(.primary)
-                                .onAppear { model.loadMore(after: user.id) }
-                        }
+        VStack(spacing: 0) {
+            header(search: model)
+                .padding(.horizontal, 16)
+            ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(SearchModel.Kind.allCases, id: \.self) { kind in
+                        page(kind)
+                            .containerRelativeFrame(.horizontal)
+                            .id(kind)
                     }
-                    footer
-                } header: {
-                    header(search: model)
                 }
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: Binding(
+                get: { Optional(model.kind) },
+                set: { if let kind = $0, kind != model.kind { model.kind = kind } }
+            ))
+        }
+        .transition(.opacity)
+    }
+
+    private func page(_ kind: SearchModel.Kind) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                switch kind {
+                case .video:
+                    ForEach(Array(model.videos.enumerated()), id: \.element.id) { index, video in
+                        VideoLink(card: video.card) {
+                            VideoRow(
+                                card: video.card,
+                                attributedTitle: BiliHTML.highlighted(video.titleHTML, color: accent.accentText(scheme)),
+                                subtitle: "\(video.author) · \(video.play.biliCount)播放"
+                            )
+                        }
+                        .buttonStyle(PressableStyle())
+                        .watchLaterMenu(video.card)
+                        .onAppear { model.loadMore(after: video.id, in: .video) }
+                    }
+                case .user:
+                    ForEach(Array(model.users.enumerated()), id: \.element.id) { index, user in
+                        NavigationLink(value: Route.space(mid: user.mid)) { UserRow(user: user) }
+                            .buttonStyle(PressableStyle())
+                            .foregroundStyle(.primary)
+                            .onAppear { model.loadMore(after: user.id, in: .user) }
+                    }
+                }
+                footer(for: kind)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 32)
         }
         .scrollDismissesKeyboard(.immediately)
         // 下拉只刷新结果（不再触发返回）
-        .refreshable { await model.refresh() }
-        .transition(.opacity)
+        .refreshable { await model.refresh(kind) }
     }
 
     private func header(search: SearchModel) -> some View {
@@ -441,21 +516,21 @@ private struct SearchResults: View {
     }
 
     @ViewBuilder
-    private var footer: some View {
-        let isEmpty = model.isEmpty
-        if model.isLoading {
+    private func footer(for kind: SearchModel.Kind) -> some View {
+        let isEmpty = model.isEmpty(kind)
+        if model.isLoading(kind) {
             ProgressView().frame(maxWidth: .infinity).padding()
-        } else if let error = model.error {
+        } else if let error = model.error(for: kind) {
             ContentUnavailableView {
                 Label("搜索失败", systemImage: "wifi.exclamationmark")
             } description: {
                 Text(error)
             } actions: {
-                Button("重试") { model.retry() }.buttonStyle(.glass)
+                Button("重试") { model.retry(kind) }.buttonStyle(.glass)
             }
         } else if isEmpty {
             ContentUnavailableView.search(text: model.submitted ?? "")
-        } else if !model.hasMore {
+        } else if !model.hasMore(kind) {
             Text("没有更多了")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondaryText)

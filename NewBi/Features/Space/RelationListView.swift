@@ -116,7 +116,7 @@ struct RelationListView: View {
                         .padding(.vertical, 10)
                 }
                 ForEach(model.users) { user in
-                    RelationRow(user: user, relation: model.relation(for: user), followsMe: model.followsMe(user)) { toast = $0 }
+                    RelationRow(user: user, relation: model.relation(for: user), followsMe: model.followsMe(user), ownList: model.mid == session.mid) { toast = $0 }
                         .onAppear { model.loadMore(after: user) }
                     if user.id != model.users.last?.id {
                         Theme.separator.frame(height: 1).padding(.leading, 58)
@@ -127,7 +127,7 @@ struct RelationListView: View {
             .padding(.horizontal, 16)
         }
         .refreshable { await model.refresh() }
-        .navigationTitle(model.kind.title)
+        .navigationTitle(model.mid == session.mid ? model.kind.title : (model.kind == .followers ? "粉丝" : "关注"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .background(Theme.background)
@@ -165,6 +165,7 @@ private struct RelationRow: View {
     let user: RelationUser
     let relation: RelationModel
     let followsMe: Bool
+    let ownList: Bool
     var onError: (String) -> Void
     @State private var confirmUnfollow = false
     @Environment(\.accent) private var accent
@@ -194,7 +195,7 @@ private struct RelationRow: View {
                 .contentShape(.rect)
             }
             .buttonStyle(PressableStyle())
-            relationButton
+            if ownList { relationButton }
         }
         .padding(.vertical, 10)
     }
@@ -217,7 +218,7 @@ private struct RelationRow: View {
         }
         .buttonStyle(PressableStyle())
         .animation(Motion.component, value: following)
-        .sensoryFeedback(.success, trigger: following) { _, new in new }
+        .sensoryFeedback(.success, trigger: relation.followFeedback)
         .confirmationDialog("确定不再关注 \(user.uname)？", isPresented: $confirmUnfollow, titleVisibility: .visible) {
             Button("不再关注", role: .destructive) { toggle() }
         }

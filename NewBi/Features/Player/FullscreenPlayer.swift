@@ -42,11 +42,19 @@ struct FullscreenOverlay: View {
     /// 横屏为 compact；竖屏视频的竖屏全屏为 regular
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @FocusState private var inputFocused: Bool
+    @State private var keyboardFrame = CGRect.null
+    @State private var controlsFrame = CGRect.zero
+    @State private var bottomInset: CGFloat = 0
     /// 长按临时 2 倍速：按住中，松手恢复原速
     @GestureState private var hold = Hold()
     @Environment(\.accent) private var accent
 
     private var player: PlayerController { model.player }
+
+    private var seekPreviewTime: Double? {
+        if case .seek(let target, _) = hud { return target }
+        return nil
+    }
 
     var body: some View {
         ZStack {
@@ -92,7 +100,7 @@ struct FullscreenOverlay: View {
             }
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
-                if let panel {
+                if let panel, !rises(panel) {
                     Group {
                         if panel == .comments {
                             CommentsPanel(model: model.comments) { closePanel() }
@@ -107,7 +115,22 @@ struct FullscreenOverlay: View {
                     .transition(.move(edge: .trailing))
                 }
             }
+            // 竖屏全屏：弹幕设置、更多、倍速、画质从底部升起，铺满屏宽；高度随内容，最多到屏高的 58%
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                if let panel, rises(panel) {
+                    PlayerDrawer(
+                        panel: panel, controller: player, model: model,
+                        sheet: true, maxHeight: controlsFrame.height * 0.58, bottomInset: bottomInset
+                    ) { closePanel(then: $0) }
+                    .transition(.move(edge: .bottom))
+                }
+            }
+            // 面板贴到屏幕最底下，Home 条的空间由面板内容自己让出来
+            .ignoresSafeArea(edges: .bottom)
         }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { controlsFrame = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomInset = $0 }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
         .animation(Motion.micro, value: showControls)
@@ -143,6 +166,15 @@ struct FullscreenOverlay: View {
                 .simultaneousGesture(holdGesture, including: locked ? .none : .all)
         }
         .ignoresSafeArea()
+    }
+
+    /// 竖屏全屏（画面比宽高）时，这四个面板改成底部升起；选集、评论仍从右侧滑出
+    private func rises(_ panel: PlayerPanel) -> Bool {
+        guard controlsFrame.height > controlsFrame.width else { return false }
+        return switch panel {
+        case .danmaku, .more, .speed, .quality: true
+        case .parts, .comments: false
+        }
     }
 
     /// 收起抽屉；`then` 在收起动画结束后才执行（换画质、改倍速这类重活不和动画抢主线程）
@@ -184,6 +216,8 @@ struct FullscreenOverlay: View {
                     let horizontal = abs(value.translation.width) > abs(value.translation.height)
                     if horizontal {
                         pan = .seek(from: player.currentTime)
+                        hideTask?.cancel()
+                        showControls = true
                     } else if value.startLocation.x < size.width / 2 {
                         pan = .brightness(from: ScreenBrightness.current)
                     } else {
@@ -213,6 +247,7 @@ struct FullscreenOverlay: View {
                 if case .seek(let target, _) = hud { player.seek(seconds: target) }
                 pan = nil
                 hud = nil
+                scheduleHide()
             }
     }
 
@@ -234,14 +269,25 @@ struct FullscreenOverlay: View {
                     .padding(.leading, 10)
                     .padding(.top, 8)
                 Spacer()
-                FullscreenProgress(controller: player)
+                FullscreenProgress(controller: player, previewTime: seekPreviewTime)
                     .padding(.horizontal, 8)
                 bottomBar
                     .padding(.top, 6)
             }
             .padding(.top, 10)
-            .padding(.bottom, 8)
+            .padding(.bottom, 8 + keyboardOverlap)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                keyboardFrame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect ?? .null
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardFrame = .null
+            }
         }
+    }
+
+    private var keyboardOverlap: CGFloat {
+        guard inputFocused, controlsFrame.intersects(keyboardFrame) else { return 0 }
+        return max(0, controlsFrame.maxY - keyboardFrame.minY)
     }
 
     private var topBar: some View {
@@ -436,7 +482,7 @@ struct FullscreenOverlay: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(for: .seconds(3.5))
-            guard !Task.isCancelled, panel == nil, !inputFocused, locked || player.isPlaying else { return }
+            guard !Task.isCancelled, pan == nil, panel == nil, !inputFocused, locked || player.isPlaying else { return }
             showControls = false
         }
     }
@@ -473,12 +519,15 @@ private struct CommentsPanel: View {
 
 private struct FullscreenProgress: View {
     let controller: PlayerController
+    let previewTime: Double?
     @State private var dragFraction: Double?
     @Environment(\.accent) private var accent
 
     var body: some View {
         let duration = controller.duration
-        let fraction = dragFraction ?? (duration > 0 ? controller.currentTime / duration : 0)
+        // 与中央 HUD 使用同一个目标时间，实际跳转仍只在松手时执行。
+        let fraction = dragFraction ?? (duration > 0
+            ? min(max((previewTime ?? controller.currentTime) / duration, 0), 1) : 0)
         let buffered = duration > 0 ? min(controller.bufferedTime / duration, 1) : 0
 
         VStack(alignment: .leading, spacing: 10) {
@@ -515,6 +564,8 @@ private struct FullscreenProgress: View {
             .accessibilityLabel("播放进度")
             .accessibilityValue("\(Int(duration * fraction).durationText) / \(Int(duration).durationText)")
         }
+        // HUD 每次变化都有动画，进度条必须直接跟随手指，不能逐帧追赶。
+        .animation(nil, value: fraction)
     }
 }
 

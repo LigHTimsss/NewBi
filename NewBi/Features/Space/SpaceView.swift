@@ -25,6 +25,8 @@ final class SpaceModel {
     private(set) var profile: SpaceCard?
     /// 粉丝勋章、成就勋章（拿不到时不显示，不影响页面）
     private(set) var accInfo: SpaceAccInfo?
+    private(set) var location: String?
+    @ObservationIgnored private var locationLoaded = false
     /// 投稿里搜索的关键词（空为不搜）
     private(set) var keyword = ""
     private(set) var topVideo: VideoCard?
@@ -78,6 +80,15 @@ final class SpaceModel {
             favoritesError = nil
         } catch {
             favoritesError = error.localizedDescription
+        }
+    }
+
+    func loadLocation() async {
+        guard !locationLoaded else { return }
+        if let tags = try? await BiliClient.shared.get(.spaceTags(mid: mid), as: SpaceTagResponse.self),
+           !Task.isCancelled {
+            location = tags.location
+            locationLoaded = true
         }
     }
 
@@ -172,13 +183,15 @@ final class SpaceModel {
 
 /// UP 主空间：头图 + 资料 + 主页 / 投稿。结构参考 B 站空间页，视觉沿用本 App 的玻璃风格
 struct SpaceView: View {
+    private let initialTab: SpaceModel.Tab
     @State private var model: SpaceModel
     @State private var tab: SpaceModel.Tab = .home
-    /// 上一次左右滑的方向：决定内容从哪一侧推进来
-    @State private var swipeForward = true
+    @State private var headerHeight: CGFloat = 0
+    @State private var restingHeaderOffset: CGFloat = 0
+    @State private var visited: Set<SpaceModel.Tab> = []
     @State private var signExpanded = false
     @State private var collapsed = false
-    @State private var tabBarMinY: CGFloat = .infinity
+    @State private var tabPinned = false
     @State private var topInset: CGFloat = 0
     @State private var toast: String?
     /// 搜 TA 的投稿
@@ -190,42 +203,27 @@ struct SpaceView: View {
 
     /// - Parameter initialTab: 一进来就停在哪个 Tab：默认「投稿」（和官方客户端一样）；我的页点「动态」时直接看动态
     init(mid: Int, initialTab: SpaceModel.Tab = .videos) {
+        self.initialTab = initialTab
         _model = State(initialValue: SpaceModel(mid: mid))
         _tab = State(initialValue: initialTab)
+        _visited = State(initialValue: [initialTab])
     }
 
     /// 顶栏底边（全局坐标）：Tab 栏滚到这里就吸顶
     private var topBarBottom: CGFloat { topInset + 52 }
-    private var tabPinned: Bool { tabBarMinY <= topBarBottom }
+    private var pinOffset: CGFloat { max(0, headerHeight + 12 - topBarBottom) }
+
+    // 五个等宽页面，初始偏移量为入口页序号 × 视口宽度。
+    private var initialPageAnchor: UnitPoint {
+        let pages = SpaceModel.Tab.allCases
+        let index = pages.firstIndex(of: initialTab) ?? 0
+        return UnitPoint(x: CGFloat(index) / CGFloat(max(1, pages.count - 1)), y: 0)
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    SpaceBanner(url: model.profile?.space?.lImg)
-                    profile
-                    tabBar
-                        .opacity(tabPinned ? 0 : 1)
-                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { tabBarMinY = $0 }
-                        .padding(.vertical, 12)
-                    if tab == .videos || tab == .dynamic, searching || !model.keyword.isEmpty || !model.dynamics.keyword.isEmpty {
-                        searchBar.transition(.opacity)
-                    }
-                    tabContent
-                        .id(tab)
-                        // 左右滑切到相邻的 Tab：往左滑是下一个，往右滑是上一个，内容跟着从对应一侧推进来
-                        .transition(.push(from: swipeForward ? .trailing : .leading))
-                        .contentShape(.rect)
-                        .simultaneousGesture(tabSwipe)
-                }
-                .padding(.bottom, 40)
-            }
-            .ignoresSafeArea(edges: .top)
-            // 下拉刷新：资料 + 当前这个 Tab 的内容
-            .refreshable { await model.refresh(tab) }
-            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y > 150 } action: { _, value in
-                withAnimation(Motion.micro) { collapsed = value }
-            }
+            tabPager
+                .ignoresSafeArea(edges: .top)
 
             VStack(spacing: 8) {
                 topBar
@@ -239,6 +237,7 @@ struct SpaceView: View {
         .toolbar(.hidden, for: .navigationBar)
         .toast($toast)
         .task { await model.load() }
+        .task(id: model.mid) { await model.loadLocation() }
     }
 
     // MARK: 顶栏：返回 / 收起后的名字 / 分享
@@ -307,8 +306,14 @@ struct SpaceView: View {
                         .background(Theme.background, in: .circle)
                     VStack(spacing: 10) {
                         HStack {
-                            stat(model.followerCount, "粉丝")
-                            stat(card.attention, "关注")
+                            NavigationLink(value: Route.relations(mid: model.mid, kind: .followers)) {
+                                stat(model.followerCount, "粉丝").contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                            NavigationLink(value: Route.relations(mid: model.mid, kind: .followings)) {
+                                stat(card.attention, "关注").contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
                             stat(profile.likeNum ?? 0, "获赞")
                         }
                         HStack(spacing: 8) {
@@ -346,7 +351,7 @@ struct SpaceView: View {
                     }
                 }
 
-                // UID（点按复制）。IP 属地只有官方 App 接口给，网页接口（acc/info、card）都没有这个字段
+                // 服务端提供属地标签时展示在 UID 旁。
                 HStack(spacing: 12) {
                     Button {
                         UIPasteboard.general.string = "\(model.mid)"
@@ -355,6 +360,7 @@ struct SpaceView: View {
                         Text("UID:\(String(model.mid))")
                     }
                     .buttonStyle(.plain)
+                    if let location = model.location { Text(location) }
                 }
                 .font(.system(size: 12))
                 .monospacedDigit()
@@ -456,13 +462,7 @@ struct SpaceView: View {
     // MARK: Tab
 
     private var tabBar: some View {
-        // 点 Tab 也按左右位置决定内容从哪一侧推进来
-        let selection = Binding<SpaceModel.Tab>(get: { tab }, set: { new in
-            let tabs = SpaceModel.Tab.allCases
-            swipeForward = (tabs.firstIndex(of: new) ?? 0) > (tabs.firstIndex(of: tab) ?? 0)
-            tab = new
-        })
-        return GlassSegmented(options: SpaceModel.Tab.allCases, selection: selection) { item in
+        GlassSegmented(options: SpaceModel.Tab.allCases, selection: $tab) { item in
             if item == .videos, let count = model.videoCount ?? model.profile?.archiveCount {
                 return "投稿 \(count.biliCount)"
             }
@@ -473,31 +473,181 @@ struct SpaceView: View {
         .padding(.horizontal, 12)
     }
 
-    /// 明显的横向滑动才切换（竖向照常滚动页面）；从左边缘开始的留给侧滑返回
-    private var tabSwipe: some Gesture {
-        DragGesture(minimumDistance: 24)
-            .onEnded { value in
-                let dx = value.translation.width, dy = value.translation.height
-                guard abs(dx) > 70, abs(dx) > abs(dy) * 1.6, value.startLocation.x > 30 else { return }
-                let tabs = SpaceModel.Tab.allCases
-                guard let current = tabs.firstIndex(of: tab) else { return }
-                let next = dx < 0 ? current + 1 : current - 1
-                guard tabs.indices.contains(next) else { return }
-                swipeForward = dx < 0
-                searchFocused = false
-                withAnimation(Motion.tab) { tab = tabs[next] }
+    private var tabPager: some View {
+        GeometryReader { viewport in
+            ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(SpaceModel.Tab.allCases, id: \.self) { page in
+                        SpacePageScroll(
+                            active: page == tab,
+                            pinOffset: pinOffset,
+                            restingHeaderOffset: $restingHeaderOffset,
+                            report: { pinned, compact in
+                                tabPinned = pinned
+                                if collapsed != compact {
+                                    withAnimation(Motion.micro) { collapsed = compact }
+                                }
+                            }
+                        ) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                pageHeader(for: page)
+                                VStack(alignment: .leading, spacing: 0) {
+                                    if page == tab, page == .videos || page == .dynamic,
+                                       searching || !model.keyword.isEmpty || !model.dynamics.keyword.isEmpty {
+                                        searchBar
+                                    }
+                                    if page == tab || visited.contains(page) {
+                                        tabContent(for: page)
+                                    }
+                                }
+                                .padding(.bottom, 40)
+                                .frame(minHeight: max(0, viewport.size.height - topBarBottom), alignment: .top)
+                            }
+                        }
+                        .refreshable { await model.refresh(page) }
+                        .frame(width: viewport.size.width, height: viewport.size.height)
+                        .clipped()
+                        .id(page)
+                    }
+                }
+                .scrollTargetLayout()
+                .background { SpacePagerPopPriority().allowsHitTesting(false) }
             }
+            .scrollIndicators(.hidden)
+            .coordinateSpace(name: "space-horizontal-pager")
+            .scrollTargetBehavior(.paging)
+            .defaultScrollAnchor(initialPageAnchor, for: .initialOffset)
+            .scrollPosition(id: Binding(
+                get: { Optional(tab) },
+                set: { page in
+                    guard let page, page != tab else { return }
+                    searchFocused = false
+                    tab = page
+                }
+            ), anchor: .leading)
+            .onChange(of: tab, initial: true) { _, selected in
+                let tabs = SpaceModel.Tab.allCases
+                guard let index = tabs.firstIndex(of: selected) else { return }
+                visited.formUnion(tabs[max(0, index - 1)...min(tabs.count - 1, index + 1)])
+            }
+        }
     }
 
     @ViewBuilder
-    private var tabContent: some View {
-        switch tab {
+    private func pageHeader(for page: SpaceModel.Tab) -> some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                SpaceBanner(url: model.profile?.space?.lImg)
+                profile
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                if page == tab { headerHeight = height }
+            }
+            tabBar
+                .opacity(tabPinned ? 0 : 1)
+                .allowsHitTesting(!tabPinned)
+                .accessibilityHidden(tabPinned)
+                .padding(.vertical, 12)
+        }
+        // 横滑只移动正文；各页裁剪出同一个头图的对应部分。
+        .visualEffect { header, geometry in
+            header.offset(x: -geometry.frame(in: .named("space-horizontal-pager")).minX)
+        }
+    }
+
+    @ViewBuilder
+    private func tabContent(for page: SpaceModel.Tab) -> some View {
+        switch page {
         case .home: SpaceHome(model: model, showAll: { withAnimation(Motion.tab) { tab = .videos } })
         case .dynamic: SpaceDynamics(model: model.dynamics)
         case .videos: SpaceVideos(model: model)
         case .seasons: SpaceSeasons(model: model)
         case .favorites: SpaceFavorites(model: model)
         }
+    }
+}
+
+/// 只让空间分页的 pan 等待导航栈的边缘返回；屏幕中间仍由原生分页处理。
+private struct SpacePagerPopPriority: UIViewRepresentable {
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ view: Probe, context: Context) { view.connect() }
+
+    final class Probe: UIView {
+        private weak var installedPan: UIPanGestureRecognizer?
+        private weak var installedPop: UIGestureRecognizer?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            connect()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            connect()
+        }
+
+        func connect() {
+            guard window != nil else { return }
+            var ancestor = superview
+            while let view = ancestor, !(view is UIScrollView) { ancestor = view.superview }
+            guard let pager = ancestor as? UIScrollView else { return }
+
+            var responder: UIResponder? = pager
+            while let current = responder {
+                if let controller = current as? UIViewController,
+                   let navigation = controller.navigationController,
+                   let pop = navigation.interactivePopGestureRecognizer {
+                    let pan = pager.panGestureRecognizer
+                    if installedPan !== pan || installedPop !== pop {
+                        BackGesture.shared.attach(to: navigation)
+                        pan.require(toFail: pop)
+                        installedPan = pan
+                        installedPop = pop
+                    }
+                    return
+                }
+                responder = current.next
+            }
+        }
+    }
+}
+
+/// 每个标签持有自己的纵向位置。横向容器只使用屏幕尺寸。
+private struct SpacePageScroll<Content: View>: View {
+    let active: Bool
+    let pinOffset: CGFloat
+    @Binding var restingHeaderOffset: CGFloat
+    let report: (Bool, Bool) -> Void
+    @ViewBuilder var content: Content
+    @State private var position = ScrollPosition(edge: .top)
+    @State private var deep = false
+    @State private var compact = false
+    @State private var hasReadingPosition = false
+
+    var body: some View {
+        ScrollView { content }
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: Int.self) { geometry in
+                let y = geometry.contentOffset.y + geometry.contentInsets.top
+                return (pinOffset > 0 && y >= pinOffset - 1 ? 1 : 0) + (y > 150 ? 2 : 0)
+            } action: { _, flags in
+                deep = flags & 1 != 0
+                compact = flags & 2 != 0
+                if active { report(deep, compact) }
+            }
+            .onScrollPhaseChange { _, phase, context in
+                guard active, phase == .idle else { return }
+                let y = context.geometry.contentOffset.y + context.geometry.contentInsets.top
+                hasReadingPosition = y > pinOffset + 1
+                restingHeaderOffset = min(max(0, y), pinOffset)
+            }
+            .onChange(of: restingHeaderOffset) { _, offset in
+                // 对齐邻页头图。已经读到深处的列表保留自己的位置。
+                if !active, !hasReadingPosition { position.scrollTo(y: offset) }
+            }
+            .onChange(of: active) { _, visible in
+                if visible { report(deep, compact) }
+            }
     }
 }
 

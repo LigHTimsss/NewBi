@@ -25,11 +25,11 @@ final class AVPlayerEngine: PlaybackEngine {
         videoView.playerLayer.videoGravity = .resizeAspect
         if AVPictureInPictureController.isPictureInPictureSupported() {
             pip = AVPictureInPictureController(playerLayer: videoView.playerLayer)
-            applyAutoPictureInPicture()
-            // 播放中在设置里改了开关：立即生效，不用重开视频
-            defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.applyAutoPictureInPicture() }
-            }
+            pip?.delegate = videoView
+        }
+        applyBackgroundPreferences()
+        defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyBackgroundPreferences() }
         }
         // 第一帧可显示：图层换了播放项后会先变回 false，新一项出帧后再变 true
         // KVO 可能在任意线程回调：回到主线程后按图层「此刻」的状态判断（届时若已换了新一项，它会是 false）
@@ -117,7 +117,7 @@ final class AVPlayerEngine: PlaybackEngine {
     func pause() { player.pause() }
 
     func seek(to seconds: Double) {
-        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .positiveInfinity)
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: seconds == 0 ? .zero : .positiveInfinity)
     }
 
     func setRate(_ rate: Float) {
@@ -136,6 +136,7 @@ final class AVPlayerEngine: PlaybackEngine {
     }
 
     func teardown() {
+        pip?.delegate = nil
         removeItemObservers()
         if let defaultsObserver {
             NotificationCenter.default.removeObserver(defaultsObserver)
@@ -146,7 +147,10 @@ final class AVPlayerEngine: PlaybackEngine {
     }
 
     /// 播放中回到主屏幕时是否自动缩成画中画（关掉后按「后台播放」决定是只出声还是暂停）
-    private func applyAutoPictureInPicture() {
+    private func applyBackgroundPreferences() {
+        let background = UserDefaults.standard.object(forKey: "backgroundPlay") as? Bool ?? true
+        let policy: AVPlayerAudiovisualBackgroundPlaybackPolicy = background ? .continuesIfPossible : .automatic
+        if player.audiovisualBackgroundPlaybackPolicy != policy { player.audiovisualBackgroundPlaybackPolicy = policy }
         guard let pip else { return }
         let enabled = UserDefaults.standard.object(forKey: Self.autoPictureInPictureKey) as? Bool ?? true
         if pip.canStartPictureInPictureAutomaticallyFromInline != enabled {
@@ -165,7 +169,29 @@ final class AVPlayerEngine: PlaybackEngine {
     }
 }
 
-final class VideoLayerView: UIView {
+final class VideoLayerView: UIView, AVPictureInPictureControllerDelegate {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping @Sendable (Bool) -> Void
+    ) {
+        Task { @MainActor [weak self] in
+            guard let window = self?.window, let scene = window.windowScene else {
+                completionHandler(false)
+                return
+            }
+            // 舞台保留了原来的播放界面；若场景仍在切换，激活时会再次应用方向。
+            Orientation.restore(in: scene)
+            window.layoutIfNeeded()
+            completionHandler(true)
+        }
+    }
+
+    nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        Task { @MainActor [weak self] in
+            if let scene = self?.window?.windowScene { Orientation.restore(in: scene) }
+        }
+    }
 }

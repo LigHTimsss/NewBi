@@ -271,9 +271,8 @@ struct VideoDetailView: View {
     @State private var tab = 0
     /// 简介 → 评论的横滑进度 0…1，Tab 下划线跟手
     @State private var pageProgress: CGFloat = 0
-    @State private var isFullscreen = false
-    /// 竖屏视频的全屏：界面保持竖屏
-    @State private var portraitFullscreen = false
+    private var isFullscreen: Bool { VideoStage.shared.isFullscreen }
+    @State private var lastDeviceOrientation: UIDeviceOrientation = .unknown
     @State private var locked = false
     /// 在画面上下拉收起：只认从画面里（进度条以上）开始的竖向拖动
     @State private var pulling: Bool?
@@ -322,10 +321,6 @@ struct VideoDetailView: View {
         // 收起后模型由舞台持有（迷你胶囊）；关掉 / 换走时舞台调用 model.close() 显式收尾
         .onDisappear {
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
-            if isFullscreen {
-                Orientation.lock(.portrait)
-                VideoStage.shared.isFullscreen = false
-            }
         }
         .toast(Binding(get: { model.resumeHint }, set: { model.resumeHint = $0 }), bottomPadding: 40)
         .sheet(isPresented: $showFavorite) {
@@ -352,6 +347,7 @@ struct VideoDetailView: View {
             followDeviceOrientation()
         }
         .onChange(of: scenePhase) { _, phase in
+            if phase == .active { lastDeviceOrientation = UIDevice.current.orientation }
             guard phase == .background else { return }
             model.flushProgress()
             guard !backgroundPlay, !model.player.isPictureInPictureActive else { return }
@@ -387,10 +383,7 @@ struct VideoDetailView: View {
                     )
                 } else {
                     CompactOverlay(
-                        controller: model.player,
-                        card: model.card,
-                        // 从链接打开时卡片里没有标题，用详情里的
-                        shareTitle: model.detail?.title ?? model.card.title,
+                        model: model,
                         onBack: { VideoStage.shared.back() },
                         onFullscreen: { setFullscreen(true) }
                     )
@@ -443,6 +436,7 @@ struct VideoDetailView: View {
         let model = self.model
         let bvid = model.card.bvid
         // 只弱引用模型、不捕获视图（self）：否则 模型 → 播放器 → 回调 → 视图 → 模型 成环，关掉视频后永不释放
+        model.player.onReplay = { [weak model] in model?.upNext = nil }
         model.player.onEnded = { [weak model] in
             guard let model, let next = PlayQueue.shared.next(after: bvid) else { return }
             withAnimation(Motion.component) { model.upNext = next }
@@ -467,25 +461,23 @@ struct VideoDetailView: View {
 
     /// - Parameter preferred: 横过手机进入全屏时转到的方向；点全屏按钮时为 nil（竖屏视频保持竖屏全屏）
     private func setFullscreen(_ on: Bool, preferred: UIInterfaceOrientationMask? = nil) {
+        guard VideoStage.shared.model === model else { return }
+        lastDeviceOrientation = UIDevice.current.orientation
         if !on { locked = false }
-        portraitFullscreen = on && preferred == nil && isVerticalVideo
-        isFullscreen = on
-        // 全屏里不能收起（左右滑是拖进度）
-        VideoStage.shared.isFullscreen = on
-        if on, !portraitFullscreen {
-            Orientation.lock(.landscape, preferred: preferred ?? .landscapeRight)
-        } else {
-            Orientation.lock(.portrait)
-        }
+        let mode: VideoStage.FullscreenMode = preferred == nil && isVerticalVideo ? .portrait : .landscape
+        VideoStage.shared.setFullscreen(on ? mode : nil, preferred: preferred)
     }
 
     private func followDeviceOrientation() {
-        guard !locked, !model.player.isMinimized else { return }
+        guard scenePhase == .active, !locked, !model.player.isMinimized,
+              !model.player.isPictureInPictureActive else { return }
         let device = UIDevice.current.orientation
+        guard device == .portrait || device.isLandscape, device != lastDeviceOrientation else { return }
+        lastDeviceOrientation = device
         // 竖屏视频横过手机不自动进横屏全屏；竖屏全屏时手机竖着也不退出
         if let mask = Orientation.interfaceMask(for: device), !isFullscreen, !isVerticalVideo {
             setFullscreen(true, preferred: mask)
-        } else if device == .portrait, isFullscreen, !portraitFullscreen {
+        } else if device == .portrait, VideoStage.shared.fullscreenMode == .landscape {
             setFullscreen(false)
         }
     }
@@ -553,9 +545,9 @@ private struct PlayerStatusView: View {
 // MARK: - 竖屏小窗控件
 
 private struct CompactOverlay: View {
-    let controller: PlayerController
-    let card: VideoCard
-    var shareTitle: String
+    let model: VideoDetailModel
+    private var controller: PlayerController { model.player }
+    @State private var showMore = false
     var onBack: () -> Void
     var onFullscreen: () -> Void
     @State private var showControls = true
@@ -599,6 +591,18 @@ private struct CompactOverlay: View {
         }
         .gesture(seekGesture)
         .animation(Motion.micro, value: seekTarget == nil)
+        .sheet(isPresented: $showMore, onDismiss: scheduleHide) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) { MorePanel(model: model) }
+                    .padding(22)
+            }
+            .preferredColorScheme(.dark)
+            .foregroundStyle(.white)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .overlay { SharePanelLayer() }
+            .toast(Binding(get: { ToastCenter.shared.message }, set: { ToastCenter.shared.message = $0 }))
+        }
         .onAppear { scheduleHide() }
     }
 
@@ -612,6 +616,10 @@ private struct CompactOverlay: View {
                     let horizontal = abs(t.width) > abs(t.height) * 1.2
                     dragMode = horizontal && value.startLocation.x > 24 && controller.duration > 0
                         ? .seek(from: controller.currentTime) : .ignore
+                    if case .seek = dragMode {
+                        hideTask?.cancel()
+                        showControls = true
+                    }
                 }
                 guard case .seek(let start) = dragMode else { return }
                 let span = min(controller.duration, 90)
@@ -643,7 +651,7 @@ private struct CompactOverlay: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
             Spacer()
-            PlaybackBar(controller: controller, onFullscreen: onFullscreen)
+            PlaybackBar(controller: controller, previewTime: seekTarget, onFullscreen: onFullscreen)
         }
         .background(alignment: .bottom) {
             LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
@@ -652,43 +660,15 @@ private struct CompactOverlay: View {
         }
     }
 
-    /// 右上角「更多」：稍后再看、分享
     private var moreMenu: some View {
-        Menu {
-            Button {
-                Task {
-                    do {
-                        try await WatchLater.add(aid: card.id)
-                        ToastCenter.shared.show("已添加到稍后再看")
-                    } catch {
-                        ToastCenter.shared.show(error.localizedDescription)
-                    }
-                }
-            } label: {
-                Label("稍后再看", systemImage: "clock.badge.plus")
-            }
-            if !card.bvid.isEmpty {
-                Button {
-                    ShareCenter.shared.video(bvid: card.bvid, title: shareTitle)
-                } label: {
-                    Label("分享", systemImage: "square.and.arrow.up")
-                }
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 16, weight: .medium))
-                .frame(width: 36, height: 36)
-                .contentShape(.circle)
-        }
-        .glassEffect(.clear.interactive(), in: .circle)
-        .accessibilityLabel("更多")
+        GlassCircleButton(systemImage: "ellipsis", label: "更多", size: 36, glass: .clear) { showMore = true }
     }
 
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, controller.isPlaying else { return }
+            guard !Task.isCancelled, seekTarget == nil, controller.isPlaying else { return }
             withAnimation(Motion.micro) { showControls = false }
         }
     }
@@ -697,12 +677,15 @@ private struct CompactOverlay: View {
 /// 独立子视图：只有它读取 currentTime，4 Hz 的进度刷新不会让整页重算
 private struct PlaybackBar: View {
     let controller: PlayerController
+    let previewTime: Double?
     var onFullscreen: () -> Void
     @Environment(\.accent) private var accent
     @State private var dragFraction: Double?
 
     var body: some View {
-        let fraction = dragFraction ?? (controller.duration > 0 ? controller.currentTime / controller.duration : 0)
+        // 画面横滑只改变显示值，松手才 seek；直接拖播放条时优先使用拖动值。
+        let fraction = dragFraction ?? (controller.duration > 0
+            ? min(max((previewTime ?? controller.currentTime) / controller.duration, 0), 1) : 0)
         HStack(spacing: 10) {
             Button { controller.togglePlay() } label: {
                 Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
@@ -751,6 +734,8 @@ private struct PlaybackBar: View {
             }
             .accessibilityLabel("全屏")
         }
+        // 进度跟手，不继承控件显隐时的隐式动画。
+        .animation(nil, value: fraction)
         .font(.system(size: 11, weight: .medium))
         .monospacedDigit()
         .foregroundStyle(.white)

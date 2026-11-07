@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 struct Endpoint: Sendable {
     var host = "https://api.bilibili.com"
@@ -250,6 +251,16 @@ extension Endpoint {
     /// 名片：头像、签名、认证、粉丝 / 关注 / 获赞、头图、是否已关注（不需要 WBI，风控较松）
     static func spaceCard(mid: Int) -> Endpoint {
         Endpoint(path: "/x/web-interface/card", query: ["mid": "\(mid)", "photo": "true"])
+    }
+
+    /// App 空间资料中的 space_tag 包含服务端允许展示的 IP 属地标签。
+    static func spaceTags(mid: Int) -> Endpoint {
+        var query = ["appkey": "27eb53fc9058f8c3", "build": "84300100", "mobi_app": "iphone",
+                     "platform": "ios", "ts": String(Int(Date.now.timeIntervalSince1970)), "vmid": String(mid)]
+        let canonical = query.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "&")
+        let digest = Insecure.MD5.hash(data: Data((canonical + "c2ed53a74eeefe3cf99fbd01d8c9c375").utf8))
+        query["sign"] = digest.map { String(format: "%02x", $0) }.joined()
+        return Endpoint(host: "https://app.bilibili.com", path: "/x/v2/space", query: query)
     }
 
     /// 置顶视频（没有时返回 code 53016）
