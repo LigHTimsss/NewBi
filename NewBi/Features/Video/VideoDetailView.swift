@@ -616,6 +616,10 @@ private struct CompactOverlay: View {
                     let horizontal = abs(t.width) > abs(t.height) * 1.2
                     dragMode = horizontal && value.startLocation.x > 24 && controller.duration > 0
                         ? .seek(from: controller.currentTime) : .ignore
+                    if case .seek = dragMode {
+                        hideTask?.cancel()
+                        showControls = true
+                    }
                 }
                 guard case .seek(let start) = dragMode else { return }
                 let span = min(controller.duration, 90)
@@ -647,7 +651,7 @@ private struct CompactOverlay: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
             Spacer()
-            PlaybackBar(controller: controller, onFullscreen: onFullscreen)
+            PlaybackBar(controller: controller, previewTime: seekTarget, onFullscreen: onFullscreen)
         }
         .background(alignment: .bottom) {
             LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
@@ -664,7 +668,7 @@ private struct CompactOverlay: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, controller.isPlaying else { return }
+            guard !Task.isCancelled, seekTarget == nil, controller.isPlaying else { return }
             withAnimation(Motion.micro) { showControls = false }
         }
     }
@@ -673,12 +677,15 @@ private struct CompactOverlay: View {
 /// 独立子视图：只有它读取 currentTime，4 Hz 的进度刷新不会让整页重算
 private struct PlaybackBar: View {
     let controller: PlayerController
+    let previewTime: Double?
     var onFullscreen: () -> Void
     @Environment(\.accent) private var accent
     @State private var dragFraction: Double?
 
     var body: some View {
-        let fraction = dragFraction ?? (controller.duration > 0 ? controller.currentTime / controller.duration : 0)
+        // 画面横滑只改变显示值，松手才 seek；直接拖播放条时优先使用拖动值。
+        let fraction = dragFraction ?? (controller.duration > 0
+            ? min(max((previewTime ?? controller.currentTime) / controller.duration, 0), 1) : 0)
         HStack(spacing: 10) {
             Button { controller.togglePlay() } label: {
                 Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
@@ -727,6 +734,8 @@ private struct PlaybackBar: View {
             }
             .accessibilityLabel("全屏")
         }
+        // 进度跟手，不继承控件显隐时的隐式动画。
+        .animation(nil, value: fraction)
         .font(.system(size: 11, weight: .medium))
         .monospacedDigit()
         .foregroundStyle(.white)

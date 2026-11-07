@@ -50,6 +50,11 @@ struct FullscreenOverlay: View {
 
     private var player: PlayerController { model.player }
 
+    private var seekPreviewTime: Double? {
+        if case .seek(let target, _) = hud { return target }
+        return nil
+    }
+
     var body: some View {
         ZStack {
             gestureLayer
@@ -163,6 +168,8 @@ struct FullscreenOverlay: View {
                     let horizontal = abs(value.translation.width) > abs(value.translation.height)
                     if horizontal {
                         pan = .seek(from: player.currentTime)
+                        hideTask?.cancel()
+                        showControls = true
                     } else if value.startLocation.x < size.width / 2 {
                         pan = .brightness(from: ScreenBrightness.current)
                     } else {
@@ -192,6 +199,7 @@ struct FullscreenOverlay: View {
                 if case .seek(let target, _) = hud { player.seek(seconds: target) }
                 pan = nil
                 hud = nil
+                scheduleHide()
             }
     }
 
@@ -213,7 +221,7 @@ struct FullscreenOverlay: View {
                     .padding(.leading, 10)
                     .padding(.top, 8)
                 Spacer()
-                FullscreenProgress(controller: player)
+                FullscreenProgress(controller: player, previewTime: seekPreviewTime)
                     .padding(.horizontal, 8)
                 bottomBar
                     .padding(.top, 6)
@@ -426,7 +434,7 @@ struct FullscreenOverlay: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(for: .seconds(3.5))
-            guard !Task.isCancelled, panel == nil, !inputFocused, locked || player.isPlaying else { return }
+            guard !Task.isCancelled, pan == nil, panel == nil, !inputFocused, locked || player.isPlaying else { return }
             showControls = false
         }
     }
@@ -463,12 +471,15 @@ private struct CommentsPanel: View {
 
 private struct FullscreenProgress: View {
     let controller: PlayerController
+    let previewTime: Double?
     @State private var dragFraction: Double?
     @Environment(\.accent) private var accent
 
     var body: some View {
         let duration = controller.duration
-        let fraction = dragFraction ?? (duration > 0 ? controller.currentTime / duration : 0)
+        // 与中央 HUD 使用同一个目标时间，实际跳转仍只在松手时执行。
+        let fraction = dragFraction ?? (duration > 0
+            ? min(max((previewTime ?? controller.currentTime) / duration, 0), 1) : 0)
         let buffered = duration > 0 ? min(controller.bufferedTime / duration, 1) : 0
 
         VStack(alignment: .leading, spacing: 10) {
@@ -505,6 +516,8 @@ private struct FullscreenProgress: View {
             .accessibilityLabel("播放进度")
             .accessibilityValue("\(Int(duration * fraction).durationText) / \(Int(duration).durationText)")
         }
+        // HUD 每次变化都有动画，进度条必须直接跟随手指，不能逐帧追赶。
+        .animation(nil, value: fraction)
     }
 }
 
