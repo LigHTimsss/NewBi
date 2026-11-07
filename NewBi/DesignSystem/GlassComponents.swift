@@ -44,6 +44,8 @@ struct LiquidSelector<Item: View>: View {
     var height: CGFloat
     /// 放在可滚动页面里时为 true：不独占触摸（页面照常上下滚动），竖向滑动不会误切
     var allowsScrolling = false
+    /// 底栏按透镜实际覆盖范围着色；普通分段控件仍按整项高亮。
+    var continuousHighlight = false
     var onSelect: (Int) -> Void
     @ViewBuilder var item: (_ index: Int, _ highlighted: Bool) -> Item
 
@@ -67,23 +69,41 @@ struct LiquidSelector<Item: View>: View {
             // 按住时跟手（限制在两端之内），松开后回到选中项中心
             let center = fingerX.map { min(max($0, slot / 2), geo.size.width - slot / 2) } ?? (CGFloat(selected) + 0.5) * slot
 
+            let lens = SelectorLensMotion(
+                slot: slot, height: geo.size.height, center: center,
+                pressing: pressing, lifted: pressing && !reduceMotion
+            )
+
             ZStack(alignment: .topLeading) {
                 SelectorIndicator(lifted: pressing && !reduceMotion)
-                    .frame(width: slot, height: geo.size.height)
-                    .position(x: center, y: geo.size.height / 2)
-                    .animation(pressing ? .interactiveSpring(response: 0.22, dampingFraction: 0.82) : Motion.component, value: center)
-                    .animation(Motion.component, value: pressing)
+                    .modifier(lens)
 
                 HStack(spacing: 0) {
                     ForEach(0..<count, id: \.self) { index in
-                        item(index, index == hover)
+                        item(index, continuousHighlight ? false : index == hover)
                             .frame(width: slot, height: geo.size.height)
                             .contentShape(.rect)
-                            .animation(Motion.micro, value: hover)
+                            .animation(continuousHighlight ? nil : Motion.micro, value: hover)
                             .accessibilityElement(children: .combine)
                             .accessibilityAddTraits(index == selected ? [.isButton, .isSelected] : .isButton)
                             .accessibilityAction { onSelect(index) }
                     }
+                }
+
+                if continuousHighlight {
+                    // 同样的图标与文字叠一层强调色；只显露透镜覆盖的部分。
+                    // 遮罩与玻璃共用位置、缩放和弹簧，拖动、点击、松手回弹都同步。
+                    HStack(spacing: 0) {
+                        ForEach(0..<count, id: \.self) { index in
+                            item(index, true)
+                                .frame(width: slot, height: geo.size.height)
+                        }
+                    }
+                    .mask(alignment: .topLeading) {
+                        Capsule().modifier(lens)
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 }
             }
             .contentShape(.rect)
@@ -121,6 +141,24 @@ struct LiquidSelector<Item: View>: View {
     }
 }
 
+/// 玻璃和着色遮罩使用同一套几何与动画参数，避免颜色领先或落后于透镜。
+private struct SelectorLensMotion: ViewModifier {
+    let slot: CGFloat
+    let height: CGFloat
+    let center: CGFloat
+    let pressing: Bool
+    let lifted: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: slot, height: height)
+            .scaleEffect(x: lifted ? 1.08 : 1, y: lifted ? 1.16 : 1)
+            .position(x: center, y: height / 2)
+            .animation(pressing ? .interactiveSpring(response: 0.22, dampingFraction: 0.82) : Motion.component, value: center)
+            .animation(Motion.component, value: pressing)
+    }
+}
+
 /// 独占（Tab 栏）还是与页面滚动并存（分段控件）
 private struct SelectorGesture<G: Gesture>: ViewModifier {
     let allowsScrolling: Bool
@@ -145,7 +183,6 @@ private struct SelectorIndicator: View {
             .fill(Theme.selection.opacity(lifted ? 0.4 : 1))
             .overlay(alignment: .bottom) { GlowLine(color: accent).padding(.bottom, 3) }
             .glassEffect(lifted ? .clear.interactive() : .identity, in: .capsule)
-            .scaleEffect(x: lifted ? 1.08 : 1, y: lifted ? 1.16 : 1)
             .shadow(color: .black.opacity(lifted ? 0.18 : 0), radius: lifted ? 10 : 0, y: lifted ? 4 : 0)
             .allowsHitTesting(false)
     }
@@ -188,12 +225,13 @@ struct GlassTabBar: View {
         GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
                 // 按住可左右滑动切换；高亮跟着手指走，松手才真正切页
-                LiquidSelector(count: AppTab.allCases.count, selected: selection.rawValue, height: 52) { index in
+                LiquidSelector(count: AppTab.allCases.count, selected: selection.rawValue, height: 52, continuousHighlight: true) { index in
                     if let tab = AppTab(rawValue: index) { onSelect(tab) }
                 } item: { index, highlighted in
                     let tab = AppTab(rawValue: index) ?? .home
                     VStack(spacing: 2) {
-                        Image(systemName: tab.icon(selected: highlighted))
+                        // 两层轮廓一致，滑动时只改变覆盖处的颜色；松手选中后再切换填充图标。
+                        Image(systemName: tab.icon(selected: tab == selection))
                             .font(.system(size: 20))
                             .frame(height: 24)
                             .contentTransition(.symbolEffect(.replace))
@@ -208,7 +246,7 @@ struct GlassTabBar: View {
                             }
                             .animation(Motion.component, value: badges)
                         Text(tab.title)
-                            .font(.system(size: 10, weight: highlighted ? .semibold : .medium))
+                            .font(.system(size: 10, weight: tab == selection ? .semibold : .medium))
                     }
                     .foregroundStyle(highlighted ? accent.accentText(scheme) : .primary)
                     .accessibilityLabel(tab.title)
