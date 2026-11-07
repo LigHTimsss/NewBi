@@ -64,7 +64,6 @@ struct ImageViewer: View {
     @State private var index: Int
     @State private var dragOffset: CGFloat = 0
     @State private var showActions = false
-    @State private var dismissingActions = false
     @Environment(\.dismiss) private var dismiss
 
     init(urls: [String], index: Int) {
@@ -102,7 +101,9 @@ struct ImageViewer: View {
             .ignoresSafeArea()
         }
         .overlay(alignment: .top) { topBar }
-        .overlay { actionSheet }
+        .overlay {
+            ImageActionMenu(showActions: $showActions, url: currentURL, save: ViewerImageAction.save, share: ViewerImageAction.share)
+        }
         // 分享框画在大图上面（大图是全屏覆盖，App 根部的分享框会被挡住）
         .overlay { SharePanelLayer() }
         // 分享框给出的提示（「图片已复制」等）平时显示在 App 根部，会被大图挡住，这里也接一份
@@ -129,78 +130,6 @@ struct ImageViewer: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 16)
         .opacity(dragOffset > 0 ? 0 : 1)
-    }
-
-    // MARK: 「…」面板：从底部滑出、停在底部
-
-    private var actionSheet: some View {
-        ZStack(alignment: .bottom) {
-            if showActions {
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
-                    .onTapGesture { dismissActions() }
-                    .accessibilityLabel("关闭")
-                    .transition(.opacity)
-                VStack(spacing: 10) {
-                    VStack(spacing: 0) {
-                        actionRow("保存到手机", icon: "square.and.arrow.down") {
-                            let url = currentURL
-                            dismissActions { ViewerImageAction.save(url) }
-                        }
-                        Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5).padding(.horizontal, 16)
-                        actionRow("分享", icon: "square.and.arrow.up") {
-                            let url = currentURL
-                            dismissActions { ViewerImageAction.share(url) }
-                        }
-                    }
-                    .glassEffect(.regular, in: .rect(cornerRadius: 26, style: .continuous))
-                    Button { dismissActions() } label: {
-                        Text("取消")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(maxWidth: .infinity, minHeight: 54)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(PressableStyle())
-                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 26, style: .continuous))
-                }
-                .foregroundStyle(.white)
-                .frame(maxWidth: 520)
-                .padding(.horizontal, 10)
-                .padding(.bottom, 8)
-                .transition(.move(edge: .bottom))
-                .accessibilityAddTraits(.isModal)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .background {
-            if dismissingActions { Color.clear.contentShape(.rect).onTapGesture {} }
-        }
-        .allowsHitTesting(showActions || dismissingActions)
-    }
-
-    private func actionRow(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: icon).font(.system(size: 18)).frame(width: 24)
-                Text(title).font(.system(size: 17))
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .frame(minHeight: 56)
-            .contentShape(.rect)
-        }
-        .buttonStyle(PressableStyle())
-    }
-
-    private func dismissActions(then next: (@MainActor () -> Void)? = nil) {
-        guard showActions, !dismissingActions else { return }
-        dismissingActions = true
-        withAnimation(.timingCurve(0.4, 0, 0.9, 0.6, duration: 0.3), completionCriteria: .removed) {
-            showActions = false
-        } completion: {
-            dismissingActions = false
-            next?()
-        }
     }
 
     private func openActions() {
@@ -303,5 +232,86 @@ private struct ZoomableImage: View {
             .simultaneousGesture(LongPressGesture(minimumDuration: 0.5, maximumDistance: 10).onEnded { _ in onMore() })
             .accessibilityAction(named: "更多", onMore)
             .accessibilityAddTraits(.isImage)
+    }
+}
+
+
+private struct ImageActionMenu: View {
+    @Binding var showActions: Bool
+    let url: URL?
+    let save: (URL?) -> Void
+    let share: (URL?) -> Void
+    @State private var closingActions = false
+
+    // MARK: 「…」面板：从底部滑出、停在底部
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            if showActions {
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                    .onTapGesture { dismissActions() }
+                    .accessibilityLabel("关闭")
+                    .transition(.opacity)
+                VStack(spacing: 10) {
+                    VStack(spacing: 0) {
+                        actionRow("保存到手机", icon: "square.and.arrow.down") {
+                            let selectedURL = url
+                            dismissActions { save(selectedURL) }
+                        }
+                        Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5).padding(.horizontal, 16)
+                        actionRow("分享", icon: "square.and.arrow.up") {
+                            let selectedURL = url
+                            dismissActions { share(selectedURL) }
+                        }
+                    }
+                    .glassEffect(.regular, in: .rect(cornerRadius: 26, style: .continuous))
+                    Button { dismissActions() } label: {
+                        Text("取消")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 54)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(PressableStyle())
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 26, style: .continuous))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: 520)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+                .transition(.move(edge: .bottom))
+                .accessibilityAddTraits(.isModal)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .background {
+            if closingActions { Color.clear.contentShape(.rect).onTapGesture {} }
+        }
+        .allowsHitTesting(showActions || closingActions)
+    }
+
+    private func actionRow(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 18)).frame(width: 24)
+                Text(title).font(.system(size: 17))
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .frame(minHeight: 56)
+            .contentShape(.rect)
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    private func dismissActions(then next: (@MainActor () -> Void)? = nil) {
+        guard showActions, !closingActions else { return }
+        closingActions = true
+        withAnimation(.timingCurve(0.4, 0, 0.9, 0.6, duration: 0.3), completionCriteria: .removed) {
+            showActions = false
+        } completion: {
+            closingActions = false
+            next?()
+        }
     }
 }

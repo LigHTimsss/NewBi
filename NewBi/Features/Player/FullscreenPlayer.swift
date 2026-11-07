@@ -44,7 +44,6 @@ struct FullscreenOverlay: View {
     @FocusState private var inputFocused: Bool
     @State private var keyboardFrame = CGRect.null
     @State private var controlsFrame = CGRect.zero
-    @State private var bottomInset: CGFloat = 0
     /// 长按临时 2 倍速：按住中，松手恢复原速
     @GestureState private var hold = Hold()
     @Environment(\.accent) private var accent
@@ -91,46 +90,9 @@ struct FullscreenOverlay: View {
                     .transition(.opacity)
             }
 
-            if panel != nil {
-                // 点击抽屉外关闭（透明，不跟着滑）
-                Color.clear
-                    .contentShape(.rect)
-                    .onTapGesture { closePanel() }
-                    .accessibilityLabel("关闭面板")
-            }
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                if let panel, !rises(panel) {
-                    Group {
-                        if panel == .comments {
-                            CommentsPanel(model: model.comments) { closePanel() }
-                        } else {
-                            PlayerDrawer(panel: panel, controller: player, model: model) { closePanel(then: $0) }
-                        }
-                    }
-                    // 评论浮窗宽度可伸缩：先占满它要的宽度，剩下的才给左边的空白
-                    .layoutPriority(1)
-                    // 只按抽屉自己的宽度滑进滑出：以前连同整屏宽的透明层一起平移，
-                    // 横屏下位移是抽屉宽度的两倍多，同样 420ms 走完显得一顿一顿
-                    .transition(.move(edge: .trailing))
-                }
-            }
-            // 竖屏全屏：弹幕设置、更多、倍速、画质从底部升起，铺满屏宽；高度随内容，最多到屏高的 58%
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                if let panel, rises(panel) {
-                    PlayerDrawer(
-                        panel: panel, controller: player, model: model,
-                        sheet: true, maxHeight: controlsFrame.height * 0.58, bottomInset: bottomInset
-                    ) { closePanel(then: $0) }
-                    .transition(.move(edge: .bottom))
-                }
-            }
-            // 面板贴到屏幕最底下，Home 条的空间由面板内容自己让出来
-            .ignoresSafeArea(edges: .bottom)
+            FullscreenPanelLayer(panel: $panel, model: model, close: { closePanel(then: $0) }, changed: scheduleHide)
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { controlsFrame = $0 }
-        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomInset = $0 }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
         .animation(Motion.micro, value: showControls)
@@ -142,7 +104,6 @@ struct FullscreenOverlay: View {
             player.setBoost(hold.active)
             hud = hold.active && player.isBoosting ? .boost(player.boostRate) : nil
         }
-        .onChange(of: panel) { scheduleHide() }
         .onChange(of: inputFocused) { scheduleHide() }
     }
 
@@ -166,15 +127,6 @@ struct FullscreenOverlay: View {
                 .simultaneousGesture(holdGesture, including: locked ? .none : .all)
         }
         .ignoresSafeArea()
-    }
-
-    /// 竖屏全屏（画面比宽高）时，这四个面板改成底部升起；选集、评论仍从右侧滑出
-    private func rises(_ panel: PlayerPanel) -> Bool {
-        guard controlsFrame.height > controlsFrame.width else { return false }
-        return switch panel {
-        case .danmaku, .more, .speed, .quality: true
-        case .parts, .comments: false
-        }
     }
 
     /// 收起抽屉；`then` 在收起动画结束后才执行（换画质、改倍速这类重活不和动画抢主线程）
@@ -627,5 +579,69 @@ private struct HUDView: View {
             .overlay(alignment: .leading) {
                 Capsule().fill(accent).frame(width: 140 * min(max(value, 0), 1), height: 3)
             }
+    }
+}
+
+private struct FullscreenPanelLayer: View {
+    @Binding var panel: PlayerPanel?
+    let model: VideoDetailModel
+    let close: ((@MainActor () -> Void)?) -> Void
+    let changed: () -> Void
+
+    @State private var size = CGSize.zero
+    @State private var bottomInset: CGFloat = 0
+
+    /// 竖屏全屏（画面比宽高）时，这四个面板改成底部升起；选集、评论仍从右侧滑出
+    private func rises(_ panel: PlayerPanel) -> Bool {
+        guard size.height > size.width else { return false }
+        return switch panel {
+        case .danmaku, .more, .speed, .quality: true
+        case .parts, .comments: false
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            if panel != nil {
+                // 点击抽屉外关闭（透明，不跟着滑）
+                Color.clear
+                    .contentShape(.rect)
+                    .onTapGesture { close(nil) }
+                    .accessibilityLabel("关闭面板")
+            }
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                if let panel, !rises(panel) {
+                    Group {
+                        if panel == .comments {
+                            CommentsPanel(model: model.comments) { close(nil) }
+                        } else {
+                            PlayerDrawer(panel: panel, controller: model.player, model: model) { close($0) }
+                        }
+                    }
+                    // 评论浮窗宽度可伸缩：先占满它要的宽度，剩下的才给左边的空白
+                    .layoutPriority(1)
+                    // 只按抽屉自己的宽度滑进滑出：以前连同整屏宽的透明层一起平移，
+                    // 横屏下位移是抽屉宽度的两倍多，同样 420ms 走完显得一顿一顿
+                    .transition(.move(edge: .trailing))
+                }
+            }
+            // 竖屏全屏：弹幕设置、更多、倍速、画质从底部升起，铺满屏宽；高度随内容，最多到屏高的 58%
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                if let panel, rises(panel) {
+                    PlayerDrawer(
+                        panel: panel, controller: model.player, model: model,
+                        sheet: true, maxHeight: size.height * 0.58, bottomInset: bottomInset
+                    ) { close($0) }
+                    .transition(.move(edge: .bottom))
+                }
+            }
+            // 面板贴到屏幕最底下，Home 条的空间由面板内容自己让出来
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomInset = $0 }
+        .onChange(of: panel) { changed() }
     }
 }

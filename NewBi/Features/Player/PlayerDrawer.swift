@@ -221,6 +221,10 @@ private struct DanmakuPanel: View {
     private var settings: DanmakuSettings { controller.danmakuSettings }
 
     var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0) { sections }
+    }
+
+    @ViewBuilder private var sections: some View {
         PanelTitle("弹幕设置")
         PanelCard {
             sliderRow("显示区域", "\(Int(settings.areaRatio * 100))%", in: 0...4, step: 1, value: Binding(
@@ -573,7 +577,7 @@ struct MorePanel: View {
                     .background(.white.opacity(0.08), in: .rect(cornerRadius: 16))
                 Text("投屏").font(.system(size: 11)).foregroundStyle(secondaryOnDark)
             }
-            // 和其他七格同一套方块图标，补满第二行；加过之后换成打勾的钟、点亮成主题色
+            // 和其他七格同一套方块图标；加过之后换成打勾的钟、点亮成主题色
             tile(
                 addedToWatchLater ? "clock.badge.checkmark" : "clock.badge.plus",
                 addedToWatchLater ? "已加稍后看" : "稍后再看", on: addedToWatchLater, action: addToWatchLater
