@@ -218,7 +218,7 @@ private struct RelationRow: View {
         }
         .buttonStyle(PressableStyle())
         .animation(Motion.component, value: following)
-        .sensoryFeedback(.success, trigger: following) { _, new in new }
+        .sensoryFeedback(.success, trigger: relation.followFeedback)
         .confirmationDialog("确定不再关注 \(user.uname)？", isPresented: $confirmUnfollow, titleVisibility: .visible) {
             Button("不再关注", role: .destructive) { toggle() }
         }

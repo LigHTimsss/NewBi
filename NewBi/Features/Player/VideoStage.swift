@@ -40,6 +40,7 @@ final class VideoStage {
     private(set) var drag = Drag.zero
     /// 收起 / 展开的动画进行中（期间页面不接收触摸）
     private(set) var isAnimating = false
+    private(set) var isClosing = false
     /// 停在迷你胶囊
     private(set) var isMinimized = false
     /// 卡片封面在屏幕上的位置和圆角（打开 / 收回时读一次）
@@ -88,6 +89,7 @@ final class VideoStage {
     /// 点视频卡片：从卡片封面展开成视频页。已经在视频页里（相关推荐）就原地换；点的是胶囊里的视频就展开胶囊
     /// - Parameter pinsPart: 卡片上的 cid 是要播的那一 P（离线缓存列表）；否则 cid 只是默认分 P，续播记录优先
     func open(_ card: VideoCard, from source: VideoSource?, pinsPart: Bool = false) {
+        if isClosing { tearDown() }
         PlayQueue.shared.claimOpen()
         let pinned = pinsPart ? card.cid : nil
         if let model, !isMinimized {
@@ -132,7 +134,7 @@ final class VideoStage {
 
     /// 从胶囊展开（点胶囊、上滑胶囊）
     func expand() {
-        guard let model, anchor == .capsule else { return }
+        guard let model, anchor == .capsule, isMinimized, !isAnimating, !isClosing, miniAxis == nil else { return }
         isMinimized = false
         model.player.isMinimized = true
         BackGesture.shared.isBlocked = true
@@ -194,7 +196,9 @@ final class VideoStage {
 
     /// 关掉胶囊：淡出后释放播放器
     func close(towards direction: CGFloat = 0) {
-        guard model != nil else { return }
+        guard model != nil, !isClosing else { return }
+        isClosing = true
+        miniAxis = nil
         animate(Motion.component) {
             fade = 0
             if direction != 0 { miniShift = direction * canvasSize.width * 0.6 }
@@ -209,6 +213,7 @@ final class VideoStage {
         model.close()
         generation += 1
         isAnimating = false
+        isClosing = false
         self.model = nil
         source = nil
         hiddenSource = nil
@@ -233,7 +238,7 @@ final class VideoStage {
     }
 
     private func swap(to card: VideoCard, pinnedCid: Int? = nil, remember: Bool) {
-        guard let current = model else { return }
+        guard let current = model, !isClosing else { return }
         if isFullscreen { setFullscreen(nil) }
         if remember { history.append(current.card) }
         current.player.pause()
@@ -320,7 +325,7 @@ final class VideoStage {
     }
 
     func miniDragEnded(_ translation: CGSize, velocity: CGSize) {
-        guard let axis = miniAxis else { return }
+        guard isMinimized, !isAnimating, !isClosing, let axis = miniAxis else { return }
         miniAxis = nil
         if axis == .horizontal {
             if abs(miniShift) > 110 || abs(velocity.width) > 800 {
@@ -628,6 +633,7 @@ private struct StageCanvas: View {
             stageBody(m)
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .allowsHitTesting(stage.model != nil && !stage.isClosing)
         .onChange(of: size, initial: true) { _, value in stage.canvasSize = value }
     }
 
@@ -666,7 +672,7 @@ private struct StageCanvas: View {
                 }
             }
             .modifier(StageLayer(role: .mini, m: m))
-            .allowsHitTesting(stage.isMinimized)
+            .allowsHitTesting(stage.isMinimized && !stage.isAnimating && !stage.isClosing)
         }
         .modifier(StageLayer(role: .clip, m: m))
         .offset(x: stage.miniShift)
