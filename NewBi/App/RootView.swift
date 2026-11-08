@@ -226,8 +226,8 @@ private struct RootTabs: View {
                 MineView()
                     .modifier(RootTabPage(active: tab == .mine && path.isEmpty))
             }
-            Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search, role: .search) {
-                // role 让系统把搜索放在右侧独立玻璃按钮内。
+            Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search, role: searchTabRole) {
+                // iOS 27 显式使用 prominent；iOS 26 使用 search，保持原生独立按钮。
                 // selection 的 setter 在选中前转为导航操作，不将它作为第四个内容页。
                 Color.clear.accessibilityHidden(true)
             }
@@ -236,6 +236,14 @@ private struct RootTabs: View {
         .background(Theme.background)
         .background { BackGestureEnabler().frame(width: 0, height: 0) }
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var searchTabRole: TabRole {
+        // 较旧 Xcode 的 SDK 不包含 prominent，保留 iOS 26 工具链兼容性。
+        #if compiler(>=6.4)
+        if #available(iOS 27.0, *) { return .prominent }
+        #endif
+        return .search
     }
 
     private func select(_ item: AppTab) {
