@@ -217,18 +217,33 @@ private struct RootTabs: View {
         TabView(selection: Binding(get: { tab }, set: select)) {
             Tab("首页", systemImage: "house", value: AppTab.home) {
                 HomeView(onAvatar: { select(.mine) }, onMessages: { path.append(Route.messages) })
-                    .background(CompactDynamicBadgeStyle())
+                    .background {
+                        CompactDynamicBadgeStyle()
+                            .frame(width: 0, height: 0)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                     .modifier(RootTabPage(active: tab == .home && path.isEmpty))
             }
             Tab("动态", systemImage: "safari", value: AppTab.dynamic) {
                 DynamicView(refreshToken: dynamicRefresh)
-                    .background(CompactDynamicBadgeStyle())
+                    .background {
+                        CompactDynamicBadgeStyle()
+                            .frame(width: 0, height: 0)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                     .modifier(RootTabPage(active: tab == .dynamic && path.isEmpty))
             }
             .badge(DynamicBadge.shared.hasNew && tab != .dynamic ? Text("●") : nil)
             Tab("我的", systemImage: "person", value: AppTab.mine) {
                 MineView()
-                    .background(CompactDynamicBadgeStyle())
+                    .background {
+                        CompactDynamicBadgeStyle()
+                            .frame(width: 0, height: 0)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                     .modifier(RootTabPage(active: tab == .mine && path.isEmpty))
             }
             Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search, role: searchTabRole) {
@@ -290,6 +305,16 @@ private struct CompactDynamicBadgeStyle: UIViewControllerRepresentable {
     }
 
     final class Controller: UIViewController {
+        // 只借助父控制器访问 UITabBarItem，不参与页面绘制或触摸处理。
+        override func loadView() {
+            let helper = UIView(frame: .zero)
+            helper.backgroundColor = .clear
+            helper.isOpaque = false
+            helper.isUserInteractionEnabled = false
+            helper.accessibilityElementsHidden = true
+            view = helper
+        }
+
         override func didMove(toParent parent: UIViewController?) {
             super.didMove(toParent: parent)
             applyBadgeStyle()
