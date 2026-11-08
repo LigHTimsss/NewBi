@@ -202,11 +202,15 @@ struct LiveRoomView: View {
 
     // MARK: 全屏
 
+    private var isPortraitStream: Bool {
+        model.player.liveVideoIsPortrait ?? model.info?.isPortrait ?? false
+    }
+
     /// 横屏直播转横屏；手机竖屏开播的直播保持竖屏铺满
     private func setFullscreen(_ on: Bool, preferred: UIInterfaceOrientationMask? = nil) {
         lastDeviceOrientation = UIDevice.current.orientation
         if !on { locked = false }
-        let portrait = preferred == nil && (model.info?.isPortrait ?? false)
+        let portrait = isPortraitStream
         // 和视频页一样不另加动画：画面跟着系统转屏一起放大
         fullscreen = on
         BackGesture.shared.isBlocked = on
@@ -220,7 +224,7 @@ struct LiveRoomView: View {
     /// 横过手机自动进入全屏，竖回来退出（锁屏、竖屏直播时不跟随）
     private func followDeviceOrientation() {
         guard scenePhase == .active, !locked, model.isLive, !model.player.isPictureInPictureActive,
-              !(model.info?.isPortrait ?? false) else { return }
+              !isPortraitStream else { return }
         let device = UIDevice.current.orientation
         guard device == .portrait || device.isLandscape, device != lastDeviceOrientation else { return }
         lastDeviceOrientation = device

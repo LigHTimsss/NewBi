@@ -123,6 +123,15 @@ final class PlayerController {
 
     /// 长按画面时的临时倍速。系统播放器播 HLS 超过 2 倍会跳帧卡顿，所以固定 2 倍（已经是 2 倍时长按不变速）
     let boostRate: Float = 2
+    /// 直播全屏方向优先依据解码后的显示尺寸；尚未就绪时由房间标记兜底。
+    var liveVideoIsPortrait: Bool? {
+        guard let system = engine as? AVPlayerEngine,
+              let size = system.player.currentItem?.presentationSize,
+              size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else { return nil }
+        return size.height > size.width
+    }
+
     var supportsPictureInPicture: Bool { engine.supportsPictureInPicture }
     var isPictureInPictureActive: Bool { engine.isPictureInPictureActive }
 
