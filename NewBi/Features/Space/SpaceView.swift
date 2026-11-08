@@ -244,12 +244,8 @@ struct SpaceView: View {
             .padding(.bottom, tabPinned ? 8 : 0)
             .frame(maxWidth: .infinity)
             .background {
-                // 与头像姓名胶囊同步淡入；从顶部实色过渡到标签栏底部半透明。
-                // 使用颜色渐变，不增加实时模糊或逐帧滚动状态更新。
-                LinearGradient(
-                    colors: [Theme.background, Theme.background.opacity(0.5)],
-                    startPoint: .top, endPoint: .bottom
-                )
+                // 与头像姓名胶囊同步淡入，吸顶后使用完全不透明背景。
+                Theme.background
                     .opacity(collapsed || tabPinned ? 1 : 0)
                     .animation(Motion.micro, value: collapsed || tabPinned)
                     .ignoresSafeArea(edges: .top)
