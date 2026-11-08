@@ -1020,9 +1020,7 @@ private struct IntroSection: View {
             // 点头像或名字进入 UP 主空间
             RouteLink(route: Route.space(mid: owner.mid)) {
                 HStack(spacing: 10) {
-                    RemoteImage(url: owner.face, size: CGSize(width: 40, height: 40))
-                        .frame(width: 40, height: 40)
-                        .clipShape(.circle)
+                    LiveAvatar(mid: owner.mid, url: owner.face, size: 40)
                     Text(owner.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                 }
                 .contentShape(.rect)

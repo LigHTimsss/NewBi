@@ -321,9 +321,7 @@ struct SpaceView: View {
             let card = profile.card
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .bottom, spacing: 16) {
-                    RemoteImage(url: card.face, size: CGSize(width: 84, height: 84))
-                        .frame(width: 84, height: 84)
-                        .clipShape(.circle)
+                    LiveAvatar(mid: model.mid, url: card.face, size: 84)
                         .padding(3)
                         .background(Theme.background, in: .circle)
                     VStack(spacing: 10) {

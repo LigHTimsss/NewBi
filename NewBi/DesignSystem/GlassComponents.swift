@@ -312,7 +312,8 @@ extension View {
                     }
                 }
             } label: {
-                Label("稍后再看", systemImage: "clock.badge.plus")
+                // clock.badge.plus 在当前系统上画不出来，菜单里只能放单个符号，用时钟
+                Label("稍后再看", systemImage: "clock")
             }
             if !card.bvid.isEmpty {
                 Button {

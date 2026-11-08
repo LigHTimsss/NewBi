@@ -578,10 +578,13 @@ struct MorePanel: View {
                 Text("投屏").font(.system(size: 11)).foregroundStyle(secondaryOnDark)
             }
             // 和其他七格同一套方块图标；加过之后换成打勾的钟、点亮成主题色
-            tile(
-                addedToWatchLater ? "clock.badge.checkmark" : "clock.badge.plus",
-                addedToWatchLater ? "已加稍后看" : "稍后再看", on: addedToWatchLater, action: addToWatchLater
-            )
+            Button(action: addToWatchLater) {
+                tileLabel(addedToWatchLater ? "已加稍后看" : "稍后再看", on: addedToWatchLater) {
+                    WatchLaterGlyph(added: addedToWatchLater)
+                }
+            }
+            .buttonStyle(PressableStyle())
+            .accessibilityAddTraits(addedToWatchLater ? .isSelected : [])
             .disabled(aid <= 0)
             DeleteVideoControl(card: model.deletionCard)
         }
@@ -616,17 +619,41 @@ struct MorePanel: View {
     }
 
     private func tileLabel(_ icon: String, _ title: String, on: Bool) -> some View {
+        tileLabel(title, on: on) {
+            Image(systemName: icon).contentTransition(.symbolEffect(.replace))
+        }
+    }
+
+    private func tileLabel(_ title: String, on: Bool, @ViewBuilder glyph: () -> some View) -> some View {
         VStack(spacing: 6) {
-            Image(systemName: icon)
+            glyph()
                 .font(.system(size: 20))
                 .foregroundStyle(on ? accent : .white)
-                .contentTransition(.symbolEffect(.replace))
                 .frame(width: 48, height: 48)
                 .background(on ? accent.opacity(0.22) : Color.white.opacity(0.08), in: .rect(cornerRadius: 16))
             Text(title)
                 .font(.system(size: 11))
                 .foregroundStyle(on ? accent : secondaryOnDark)
         }
+    }
+}
+
+/// 稍后再看的图标：时钟右上角挂一个小「+」，加过后换成「✓」。
+/// 系统的 clock.badge.plus 在当前系统上画不出来（格子是空的），用两个一定存在的符号拼
+private struct WatchLaterGlyph: View {
+    let added: Bool
+
+    var body: some View {
+        Image(systemName: "clock")
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: added ? "checkmark" : "plus")
+                    .font(.system(size: 10, weight: .heavy))
+                    .contentTransition(.symbolEffect(.replace))
+                    .offset(x: 7, y: -5)
+            }
+            // 角标往右上挪了，整体往左下回一点，看起来仍在格子正中
+            .offset(x: -2, y: 1)
+            .accessibilityHidden(true)
     }
 }
 

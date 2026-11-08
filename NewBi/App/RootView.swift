@@ -24,6 +24,8 @@ enum Route: Hashable {
     case notices(NoticeKind)
     /// 私信会话
     case chat(ChatPeer)
+    /// 直播间（可以是短号）
+    case live(roomID: Int)
 }
 
 /// 根视图：系统 TabView 提供原生 Liquid Glass 底栏。
@@ -70,6 +72,8 @@ struct RootView: View {
                         NoticeListView(kind: kind)
                     case .chat(let peer):
                         ChatView(peer: peer)
+                    case .live(let roomID):
+                        LiveRoomView(roomID: roomID)
                     }
                 }
                 .miniPlayerInset()
@@ -87,6 +91,11 @@ struct RootView: View {
         }
         // 自绘分享框：在视频舞台之上，哪里点分享都从这里弹出
         .overlay { SharePanelLayer() }
+        // 「直播中」头像这类嵌在别的链接里的入口：不套 NavigationLink，直接推页面（在视频页上先收进胶囊）
+        .environment(\.pushRoute, { route in
+            VideoStage.shared.makeRoom()
+            path.append(route)
+        })
         // 正文里的 newbi:// 链接：@ 进空间、BV 号开视频；其它网址交给系统（Safari）
         .environment(\.openURL, OpenURLAction { url in
             switch AppLink.parse(url) {

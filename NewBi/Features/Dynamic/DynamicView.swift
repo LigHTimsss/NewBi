@@ -281,11 +281,11 @@ struct DynamicView: View {
                 ForEach(model.ups) { up in
                     NavigationLink(value: Route.space(mid: up.mid)) {
                         VStack(spacing: 6) {
-                            RemoteImage(url: up.face, size: CGSize(width: 52, height: 52))
-                                .frame(width: 52, height: 52)
-                                .clipShape(.circle)
+                            // 在直播的人换成粉色直播圈（点头像进直播间），否则有更新时是主题色光圈
+                            let isLive = LiveStatusCenter.shared.room(for: up.mid) != nil
+                            LiveAvatar(mid: up.mid, url: up.face, size: 52)
                                 .padding(2.5)
-                                .overlay { if up.hasUpdate == true { UpdateRing() } }
+                                .overlay { if up.hasUpdate == true && !isLive { UpdateRing() } }
                             Text(up.uname)
                                 .font(.system(size: 11))
                                 .foregroundStyle(.primary)
@@ -439,9 +439,7 @@ struct DynamicCard: View {
             HStack(spacing: 10) {
                 NavigationLink(value: Route.space(mid: author.mid)) {
                     HStack(spacing: 10) {
-                        RemoteImage(url: author.face, size: CGSize(width: 40, height: 40))
-                            .frame(width: 40, height: 40)
-                            .clipShape(.circle)
+                        LiveAvatar(mid: author.mid, url: author.face, size: 40)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(author.name)
                                 .font(.system(size: 15, weight: .semibold))
