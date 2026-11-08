@@ -79,6 +79,7 @@ struct RootView: View {
                     }
                 }
                 .miniPlayerInset()
+                .appPageBackground()
             }
         }
         // 视频页在导航栈外：一层全屏舞台。卡片封面放大成视频页，返回时收成胶囊或缩回卡片，全程同一个画面
@@ -275,6 +276,7 @@ private struct RootTabPage: ViewModifier {
             .coverSpace()
             // TabView 已提供底栏安全区，这里只额外为迷你播放器留空间。
             .miniPlayerInset()
+            .appPageBackground()
             .toolbar(.visible, for: .tabBar)
     }
 }

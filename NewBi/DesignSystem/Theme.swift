@@ -114,3 +114,16 @@ extension Int {
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
     }
 }
+
+/// 主题背景必须画在页面内部，不能只放在 TabView / NavigationStack 背后。
+private struct AppPageBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { Theme.background.ignoresSafeArea() }
+    }
+}
+
+extension View {
+    func appPageBackground() -> some View { modifier(AppPageBackground()) }
+}
