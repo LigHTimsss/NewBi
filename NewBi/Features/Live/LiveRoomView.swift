@@ -65,6 +65,12 @@ final class LiveRoomModel {
         }
     }
 
+    /// 直播间被别的页面盖住（进了主播空间）：画面已暂停，弹幕长连接也断开，回来时 load() 再连上
+    func suspend() {
+        player.pause()
+        danmakuClient.stop()
+    }
+
     /// 离开直播间：停流、交出锁屏控制
     func close() {
         danmakuClient.stop()
@@ -130,7 +136,7 @@ struct LiveRoomView: View {
         .onDisappear {
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
             if fullscreen { setFullscreen(false) }
-            model.player.pause()
+            model.suspend()
         }
         // 只在这个页面真正被移出导航栈时停流（推入主播空间时视图还在，不收尾）
         .background(DismantleObserver { model.close() })

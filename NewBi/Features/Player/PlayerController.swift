@@ -183,14 +183,35 @@ final class PlayerController {
         engine = AVPlayerEngine()
         danmaku.settings = danmakuSettings
         attach(engine)
-        // 4 Hz 时钟：进度条和弹幕生成足够；弹幕运动本身在 Core Animation 里，不依赖这个频率
+        // 播放中 4 Hz（进度条和弹幕生成足够；弹幕运动本身在 Core Animation 里），不播时 1 Hz
+        startClock()
+    }
+
+    /// 时钟：播放中（或刚操作过的 3 秒内）4 Hz，给进度条和弹幕用；暂停、停在胶囊、在后台不播时降到 1 Hz，
+    /// 只为发现画中画 / 系统控件从外面让它开始播放。不在循环里强持有自己（否则对象永远释放不了）
+    private func startClock() {
+        clock?.cancel()
         clock = Task { [weak self] in
             while !Task.isCancelled {
-                guard self != nil else { return }
-                self?.tick()
-                try? await Task.sleep(for: .milliseconds(250))
+                guard let fast = self?.clockTick() else { return }
+                try? await Task.sleep(for: .milliseconds(fast ? 250 : 1000))
             }
         }
+    }
+
+    @ObservationIgnored private var busyUntil = Date.distantPast
+
+    /// 播放 / 暂停 / 拖动后马上按 4 Hz 跑一阵：引擎状态是异步变化的，不能等慢时钟的下一拍
+    private func wakeClock() {
+        guard !isClosed else { return }
+        busyUntil = .now.addingTimeInterval(3)
+        startClock()
+    }
+
+    /// - Returns: 下一拍是否要快
+    private func clockTick() -> Bool {
+        tick()
+        return isPlaying || Date.now < busyUntil
     }
 
     /// 兜底：正常情况下舞台关掉 / 换走视频时已经调过 shutdown()。
@@ -229,8 +250,13 @@ final class PlayerController {
     /// 锁屏 / 控制中心显示的标题、UP 主、封面
     func setNowPlaying(title: String, artist: String, cover: String) {
         guard !isClosed else { return }
-        RemoteControl.shared.activate(self, metadata: .init(title: title, artist: artist, cover: cover))
+        let metadata = RemoteControl.Metadata(title: title, artist: artist, cover: cover)
+        nowPlaying = metadata
+        RemoteControl.shared.activate(self, metadata: metadata)
     }
+
+    /// 锁屏上显示的标题 / UP 主 / 封面。别的播放器（直播间）关掉后，锁屏凭它交还给这个播放器
+    @ObservationIgnored private(set) var nowPlaying: RemoteControl.Metadata?
 
     func requestPart(offset: Int) {
         guard offset > 0 ? hasNextPart : hasPreviousPart else { return }
@@ -320,7 +346,7 @@ final class PlayerController {
         if let source { danmaku.load(cid: source.cid) }
         await play(quality: isLive ? Self.liveDefaultQuality : Self.defaultQuality, resumeAt: startAt)
         guard !isClosed, generation == self.generation, error == nil else { return }
-        if autoplay { engine.play() }
+        if autoplay { startEngine() }
     }
 
     /// 播放区里的「重试」：从第一级重新取流，回到当前位置
@@ -339,7 +365,7 @@ final class PlayerController {
         Task {
             await play(quality: qn, resumeAt: time)
             guard !isClosed, generation == self.generation, error == nil else { return }
-            engine.play()
+            startEngine()
         }
     }
 
@@ -350,7 +376,7 @@ final class PlayerController {
         let time: Double? = isLive ? nil : currentTime
         let wasPlaying = isPlaying
         await play(quality: qn, resumeAt: time)
-        if wasPlaying, !isClosed, generation == self.generation { engine.play() }
+        if wasPlaying, !isClosed, generation == self.generation { startEngine() }
     }
 
     /// 取流结果：等全部 await 结束、确认仍是当前世代后才一次性提交到控制器
@@ -612,7 +638,7 @@ final class PlayerController {
         Task {
             await play(quality: qn, resumeAt: time)
             guard !isClosed, generation == self.generation, error == nil else { return }
-            engine.play()
+            startEngine()
         }
     }
 
@@ -649,11 +675,21 @@ final class PlayerController {
             currentTime = 0
             engine.seek(to: 0)
         }
-        engine.play()
+        startEngine()
     }
 
     func pause() {
         engine.pause()
+        wakeClock()
+    }
+
+    /// 所有「开始出声」都走这里：先让别的播放器停下（胶囊视频和直播间不同时出声）、锁屏交给自己，
+    /// 再把时钟拨回 4 Hz，播放按钮、进度条马上跟上
+    private func startEngine() {
+        guard !isClosed else { return }
+        RemoteControl.shared.becamePlaying(self)
+        engine.play()
+        wakeClock()
     }
 
     func seek(to fraction: Double) {
@@ -747,6 +783,8 @@ final class PlayerController {
                 engine.setRate(rate)
             }
             playing ? danmaku.resume(rate: isBoosting ? boostRate : rate) : danmaku.pause()
+            // 从外面开始播（画中画、耳机、系统控件）：同样让别的播放器停下
+            if playing { RemoteControl.shared.becamePlaying(self) }
             RemoteControl.shared.refresh(self)
         }
         if playing, danmakuEnabled, !isMinimized { danmaku.tick(at: seconds) }

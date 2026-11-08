@@ -145,6 +145,7 @@ final class DownloadManager {
             tasks[key]?.cancel()
             tasks[key] = nil
             refreshes[key] = nil
+            awaitingResume.remove(key)
         }
         cancelExtras(id)
         clearNote(id)
@@ -160,11 +161,25 @@ final class DownloadManager {
             let key = DownloadPaths.taskKey(id, part)
             guard let task = tasks[key] else { continue }
             let taskID = task.taskIdentifier
+            awaitingResume.insert(key)
             task.cancel(byProducingResumeData: { data in
-                guard let data else { return }
-                Task { @MainActor in DownloadManager.shared.storeResumeData(data, key: key, taskID: taskID) }
+                Task { @MainActor in DownloadManager.shared.resumeDataArrived(data, key: key, taskID: taskID) }
             })
         }
+    }
+
+    /// 暂停时正在等续传数据的那几路。续传数据和任务的完成回调谁先到不一定：
+    /// 完成回调先到、用户又已经点了继续时，不能马上从头开一个新任务（续传数据随后到达会被当成旧的丢掉，白下一遍），
+    /// 要等续传数据到了再开
+    @ObservationIgnored private var awaitingResume: Set<String> = []
+
+    private func resumeDataArrived(_ data: Data?, key: String, taskID: Int) {
+        awaitingResume.remove(key)
+        if let data { storeResumeData(data, key: key, taskID: taskID) }
+        // 完成回调已经先到、期间又点了继续：续传数据齐了，现在开
+        guard tasks[key] == nil, let (id, _) = DownloadPaths.parse(taskKey: key),
+              let index = records.firstIndex(where: { $0.id == id }), records[index].state == .downloading else { return }
+        start(at: index)
     }
 
     /// 续传数据只在这一路没有更新的尝试在跑时写入（迟到的旧数据不能覆盖新一轮的）
@@ -193,8 +208,8 @@ final class DownloadManager {
         for part in DownloadRecord.Part.allCases {
             guard let stream = record.stream(part), !(part == .video ? record.videoDone : record.audioDone) else { continue }
             let key = DownloadPaths.taskKey(record.id, part)
-            // 上一次尝试还没收尾（刚暂停又继续）：等它的完成回调到了再开
-            if tasks[key] != nil {
+            // 上一次尝试还没收尾（刚暂停又继续）：等它的完成回调和续传数据都到了再开
+            if tasks[key] != nil || awaitingResume.contains(key) {
                 alive = true
                 continue
             }
@@ -353,7 +368,8 @@ final class DownloadManager {
         if event.cancelled {
             // 暂停 / 失败时停下的那一路：留下续传数据；期间用户已经点了继续，就接着下
             if let data = event.resumeData { storeResumeData(data, key: key, taskID: event.taskID) }
-            if records[index].state == .downloading { start(at: index) }
+            // 续传数据还没到：等 resumeDataArrived 再开，不从头下
+            if records[index].state == .downloading, !awaitingResume.contains(key) { start(at: index) }
             return
         }
 

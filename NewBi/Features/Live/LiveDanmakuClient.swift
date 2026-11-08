@@ -1,3 +1,4 @@
+import Compression
 import Foundation
 
 /// 直播弹幕服务器地址和进房凭证（getDanmuInfo，WBI 签名）
@@ -146,7 +147,8 @@ final class LiveDanmakuClient {
                 do {
                     let message = try await task.receive()
                     guard let self, self.generation == generation else { return }
-                    self.failures = 0
+                    // 不在这里清零失败次数：握手被拒时服务器也会先回一个包再断开。
+                    // 只有进房成功（op 8 code 0）或收到心跳回复（op 3）才算连上了
                     switch message {
                     case .data(let data): self.handle(data)
                     case .string(let text): self.handle(Data(text.utf8))
@@ -160,21 +162,26 @@ final class LiveDanmakuClient {
         }
     }
 
-    /// 断线：换下一个服务器，等一会儿再连（1、2、4…最多 30 秒）
-    private func dropped(_ generation: Int) {
+    /// 断线：换下一个服务器，等一会儿再连（1、2、4…最多 30 秒）。
+    /// - Parameter rejected: 服务器明确拒绝了进房（凭证失效 / 风控）：不再换服务器硬试，直接重新拿凭证
+    private func dropped(_ generation: Int, rejected: Bool = false) {
         guard !stopped, generation == self.generation else { return }
+        // 让这一轮连接的接收 / 心跳回调全部作废，断开时不会再进来一次
+        self.generation += 1
         task?.cancel(with: .abnormalClosure, reason: nil)
         task = nil
         heartbeat?.cancel()
+        receiver?.cancel()
         failures += 1
         hostIndex += 1
         let delay = min(30, pow(2, Double(min(failures, 5)) - 1))
+        let refetch = rejected || failures >= 3
         reconnect?.cancel()
         reconnect = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self, !self.stopped else { return }
-            // 连续失败多次，凭证可能过期了：重新拿一次
-            if self.failures >= 3 {
+            // 被拒或连续失败多次，凭证可能过期了：重新拿一次
+            if refetch {
                 await self.fetchInfoAndConnect()
             } else {
                 self.connect()
@@ -211,16 +218,39 @@ final class LiveDanmakuClient {
     }
 
     private func handle(_ data: Data) {
-        for body in Self.messages(in: data) {
-            guard let danmaku = Self.parseDanmaku(body) else { continue }
-            onDanmaku?(danmaku)
+        for packet in Self.messages(in: data) {
+            switch packet {
+            case .message(let body):
+                guard let danmaku = Self.parseDanmaku(body) else { continue }
+                onDanmaku?(danmaku)
+            case .authReply(let body):
+                // {"code":0} 才是进房成功；其余（-101 等）是凭证被拒，服务器随后会断开
+                let code = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["code"] as? Int ?? 0
+                if code == 0 {
+                    failures = 0
+                } else {
+                    dropped(generation, rejected: true)
+                    return
+                }
+            case .heartbeatReply:
+                failures = 0
+            }
         }
     }
 
-    /// 把一个（可能是压缩的）包拆成一条条 JSON 正文
-    private static func messages(in data: Data) -> [Data] {
+    private enum Packet {
+        /// op 5：一条通知（JSON）
+        case message(Data)
+        /// op 8：进房回复
+        case authReply(Data)
+        /// op 3：心跳回复（正文是人气值）
+        case heartbeatReply
+    }
+
+    /// 把一个（可能是压缩的）包拆成一条条消息
+    private static func messages(in data: Data) -> [Packet] {
         let bytes = [UInt8](data)
-        var result: [Data] = []
+        var result: [Packet] = []
         var offset = 0
         func read32(_ at: Int) -> Int {
             Int(bytes[at]) << 24 | Int(bytes[at + 1]) << 16 | Int(bytes[at + 2]) << 8 | Int(bytes[at + 3])
@@ -235,20 +265,63 @@ final class LiveDanmakuClient {
             guard length >= headerLength, headerLength >= 16, offset + length <= bytes.count else { break }
             let body = Data(bytes[(offset + headerLength)..<(offset + length)])
             offset += length
-            guard op == 5 else { continue } // 3 心跳回复（人气值）、8 进房回复，都不需要
+            switch op {
+            case 8:
+                result.append(.authReply(body))
+                continue
+            case 3:
+                result.append(.heartbeatReply)
+                continue
+            case 5:
+                break
+            default:
+                continue
+            }
             switch version {
             case 2:
-                // zlib：去掉 2 字节头后是原始 deflate
-                guard body.count > 2,
-                      let inflated = try? (Data(body.dropFirst(2)) as NSData).decompressed(using: .zlib) as Data else { continue }
+                // zlib：2 字节头 + 原始 deflate + 4 字节校验和
+                guard body.count > 2, let inflated = inflate(body.dropFirst(2)) else { continue }
                 result.append(contentsOf: messages(in: inflated))
             case 0, 1:
-                result.append(body)
+                result.append(.message(body))
             default:
                 continue // 没有请求 brotli（protover 3），收到也跳过
             }
         }
         return result
+    }
+
+    /// 解原始 deflate。用流式解码：读到 deflate 的结束块就停，末尾的 adler32 校验和不会让整包解压失败
+    private static func inflate(_ input: Data) -> Data? {
+        let capacity = 64 * 1024
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: capacity)
+        defer { buffer.deallocate() }
+        let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        defer { stream.deallocate() }
+        guard compression_stream_init(stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else { return nil }
+        defer { compression_stream_destroy(stream) }
+
+        return Data(input).withUnsafeBytes { (source: UnsafeRawBufferPointer) -> Data? in
+            guard let base = source.bindMemory(to: UInt8.self).baseAddress else { return nil }
+            stream.pointee.src_ptr = base
+            stream.pointee.src_size = source.count
+            var output = Data()
+            while true {
+                stream.pointee.dst_ptr = buffer
+                stream.pointee.dst_size = capacity
+                let status = compression_stream_process(stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+                output.append(buffer, count: capacity - stream.pointee.dst_size)
+                switch status {
+                case COMPRESSION_STATUS_OK:
+                    // 输入已经读完却还没到结束块：数据被截断，按已解出的部分处理
+                    if stream.pointee.src_size == 0, stream.pointee.dst_size == capacity { return output.isEmpty ? nil : output }
+                case COMPRESSION_STATUS_END:
+                    return output
+                default:
+                    return output.isEmpty ? nil : output
+                }
+            }
+        }
     }
 
     /// DANMU_MSG：info[0] = [_, 模式, 字号, 颜色, 时间戳, _, _, _, _, 抽奖类型, _, _, 是否表情, …]，info[1] = 内容

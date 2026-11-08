@@ -19,6 +19,8 @@ final class RemoteControl {
     private weak var controller: PlayerController?
     /// deinit 时弱引用已经是 nil，靠 id 判断是不是当前服务的播放器
     private var controllerID: ObjectIdentifier?
+    /// 被顶替下来的上一个播放器（比如进直播间时胶囊里的视频）：当前这个关掉后把锁屏交还给它
+    private weak var previous: PlayerController?
     private var metadata: Metadata?
     private var artwork: MPMediaItemArtwork?
     private var artworkTask: Task<Void, Never>?
@@ -37,6 +39,9 @@ final class RemoteControl {
             artwork = nil
             loadArtwork(metadata.cover)
         }
+        if let current = self.controller, current !== controller, !current.isClosed {
+            previous = current
+        }
         self.controller = controller
         controllerID = ObjectIdentifier(controller)
         self.metadata = metadata
@@ -46,15 +51,20 @@ final class RemoteControl {
 
     func refresh(_ controller: PlayerController) {
         guard controller === self.controller, let metadata else { return }
+        let live = controller.isLive
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: metadata.title,
             MPMediaItemPropertyArtist: metadata.artist,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: controller.currentTime,
             MPNowPlayingInfoPropertyPlaybackRate: controller.isPlaying ? Double(controller.effectiveRate) : 0,
             MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+            // 直播：锁屏显示「直播」，没有进度条
+            MPNowPlayingInfoPropertyIsLiveStream: live,
         ]
-        if controller.duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = controller.duration }
+        if !live {
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = controller.currentTime
+            if controller.duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = controller.duration }
+        }
         if let artwork { info[MPMediaItemPropertyArtwork] = artwork }
         let center = MPNowPlayingInfoCenter.default()
         center.nowPlayingInfo = info
@@ -63,12 +73,36 @@ final class RemoteControl {
         let commands = MPRemoteCommandCenter.shared()
         commands.nextTrackCommand.isEnabled = controller.hasNextPart
         commands.previousTrackCommand.isEnabled = controller.hasPreviousPart
+        // 直播不能快进快退、拖进度、变速：锁屏上不出这些按钮，免得点了没反应
+        commands.skipForwardCommand.isEnabled = !live
+        commands.skipBackwardCommand.isEnabled = !live
+        commands.changePlaybackPositionCommand.isEnabled = !live
+        commands.changePlaybackRateCommand.isEnabled = !live
     }
 
-    /// 播放器释放时调用；只有当前服务的那个才会清空
+    /// 某个播放器开始出声：同一时间只留一个在播（胶囊里的视频和直播间不会叠在一起），锁屏也跟着它走
+    func becamePlaying(_ controller: PlayerController) {
+        guard !controller.isClosed else { return }
+        if let current = self.controller, current !== controller { current.pause() }
+        if let other = previous, other !== controller { other.pause() }
+        if self.controller !== controller, let metadata = controller.nowPlaying {
+            activate(controller, metadata: metadata)
+        }
+    }
+
+    /// 播放器释放时调用；只有当前服务的那个才会清空。
+    /// 被它顶替下来的播放器还在（胶囊里的视频）就把锁屏交还给它
     func deactivate(_ id: ObjectIdentifier) {
-        guard controllerID == id else { return }
+        guard controllerID == id else {
+            if let previous, ObjectIdentifier(previous) == id { self.previous = nil }
+            return
+        }
+        let fallback = previous
+        previous = nil
         clear()
+        if let fallback, !fallback.isClosed, let metadata = fallback.nowPlaying {
+            activate(fallback, metadata: metadata)
+        }
     }
 
     private func clear() {

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Security
 
 /// 登录凭据放在哪：
@@ -9,15 +10,41 @@ import Security
 enum Credentials {
     static let refreshTokenAccount = "refresh_token"
 
-    static var refreshToken: String? { Keychain.read(refreshTokenAccount) }
+    /// Keychain 暂时写不进去时（比如设备还没解锁过）先放在内存里：
+    /// 刷新 Cookie 后服务器已作废旧 token，新的丢了下次刷新就必然失败，最后被悄悄登出
+    private static let pendingToken = OSAllocatedUnfairLock<String?>(initialState: nil)
 
-    static func saveRefreshToken(_ token: String) {
-        guard !token.isEmpty else { return }
-        Keychain.write(token, account: refreshTokenAccount)
+    static var refreshToken: String? {
+        pendingToken.withLock { $0 } ?? Keychain.read(refreshTokenAccount)
+    }
+
+    /// - Returns: 是否已经写进 Keychain（false 时 token 暂存在内存，回到前台会再写一次）
+    @discardableResult
+    static func saveRefreshToken(_ token: String) -> Bool {
+        guard !token.isEmpty else { return false }
+        if Keychain.write(token, account: refreshTokenAccount) {
+            pendingToken.withLock { $0 = nil }
+            return true
+        }
+        pendingToken.withLock { $0 = token }
+        return false
+    }
+
+    /// 回到前台时把暂存在内存里的 token 补写进 Keychain
+    static func retryPendingSave() {
+        guard let token = pendingToken.withLock({ $0 }) else { return }
+        saveRefreshToken(token)
+    }
+
+    /// 当前 Cookie 属于哪个账号（DedeUserID）
+    static var cookieMid: String? {
+        HTTPCookieStorage.shared.cookies(for: URL(string: "https://www.bilibili.com")!)?
+            .first { $0.name == "DedeUserID" }?.value
     }
 
     /// 退出登录：删 B 站域下除设备标识（buvid*）以外的 Cookie，删 refresh_token
     static func clear() {
+        pendingToken.withLock { $0 = nil }
         Keychain.delete(refreshTokenAccount)
         clearCookies()
     }
@@ -107,6 +134,7 @@ actor CookieRefresher {
 
     private static func run() async -> Bool {
         guard let csrf = BiliClient.csrfToken, let token = Credentials.refreshToken else { return false }
+        let mid = Credentials.cookieMid
         do {
             let info = try await BiliClient.shared.get(.cookieInfo(csrf: csrf), as: Info.self)
             guard info.refresh else { return false }
@@ -120,11 +148,13 @@ actor CookieRefresher {
                 form: ["csrf": csrf, "refresh_csrf": refreshCSRF, "source": "main_web", "refresh_token": token],
                 as: Refreshed.self
             )
-            // 刷新途中退出了登录：响应带回的新 Cookie 不能留下
+            // 刷新途中退出了登录（或换了账号）：响应带回的旧账号 Cookie 不能留下。
+            // 只在 Cookie 现在仍是旧账号的时候清：期间已经登录了另一个账号、Cookie 是新账号的，就不动它
             guard Credentials.refreshToken == token else {
-                Credentials.clearCookies()
+                if Credentials.cookieMid == mid { Credentials.clearCookies() }
                 return false
             }
+            // 写不进 Keychain 时 token 先留在内存里，回到前台再补写（见 retryPendingSave）
             Credentials.saveRefreshToken(result.refreshToken)
             // 确认失败不影响新 Cookie 使用（旧 Cookie 只是晚些过期）
             if let fresh = BiliClient.csrfToken {

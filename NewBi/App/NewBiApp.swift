@@ -27,6 +27,10 @@ struct NewBiApp: App {
                 .preferredColorScheme([1, 3].contains(appearance) ? .light : [2, 4].contains(appearance) ? .dark : nil)
                 .onChange(of: appearance, initial: true) { _, value in AppearancePalette.shared.mode = value }
                 .task { await session.bootstrap() }
+                // 上次刷新 Cookie 时 Keychain 没写进去的 refresh_token：回到前台补写
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    Credentials.retryPendingSave()
+                }
         }
     }
 }

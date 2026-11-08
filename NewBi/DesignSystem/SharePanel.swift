@@ -74,7 +74,7 @@ struct SharePanelLayer: View {
     }
 }
 
-/// 自绘的分享框：微信、QQ、复制链接、系统分享
+/// 自绘的分享框：微信、QQ、复制链接、更多（系统分享）
 private struct SharePanel: View {
     let payload: SharePayload
 
@@ -95,7 +95,7 @@ private struct SharePanel: View {
                 target("微信", icon: "message.fill", fill: Self.weChatGreen) { openApp("微信", scheme: "weixin://") }
                 target("QQ", icon: "bubble.left.fill", fill: Self.qqBlue) { openApp("QQ", scheme: "mqq://") }
                 target(payload.image == nil ? "复制链接" : "复制图片", icon: payload.image == nil ? "link" : "doc.on.doc", fill: nil, action: copyLink)
-                target("系统分享", icon: "square.and.arrow.up", fill: nil, action: systemShare)
+                target("更多", icon: "square.and.arrow.up", fill: nil, action: systemShare)
             }
             Button { ShareCenter.shared.dismiss() } label: {
                 Text("取消")
