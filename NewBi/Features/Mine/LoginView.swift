@@ -49,6 +49,8 @@ struct LoginView: View {
         .frame(maxWidth: .infinity)
         .animation(Motion.component, value: mode)
         .presentationDetents([.large])
+        .appPageBackground()
+        .presentationBackground(Theme.background)
         .onAppear { if mode == .qr { qr.start() } }
         .onDisappear {
             qr.stop()
