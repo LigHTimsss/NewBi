@@ -1,12 +1,12 @@
 import Foundation
 
-struct Owner: Decodable, Hashable, Sendable {
+struct Owner: Codable, Hashable, Sendable {
     let mid: Int
     let name: String
     let face: String?
 }
 
-struct VideoStat: Decodable, Hashable, Sendable {
+struct VideoStat: Codable, Hashable, Sendable {
     let view: Int?
     let danmaku: Int?
     let like: Int?
@@ -17,7 +17,7 @@ struct VideoStat: Decodable, Hashable, Sendable {
 }
 
 /// 列表卡片：推荐流用 `id`，热门/相关推荐用 `aid`
-struct VideoCard: Decodable, Identifiable, Hashable, Sendable {
+struct VideoCard: Codable, Identifiable, Hashable, Sendable {
     let id: Int
     let bvid: String
     let cid: Int?
@@ -40,6 +40,18 @@ struct VideoCard: Decodable, Identifiable, Hashable, Sendable {
         self.duration = duration
         self.owner = owner
         self.stat = stat
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(bvid, forKey: .bvid)
+        try c.encodeIfPresent(cid, forKey: .cid)
+        try c.encode(title, forKey: .title)
+        try c.encode(pic, forKey: .pic)
+        try c.encode(duration, forKey: .duration)
+        try c.encodeIfPresent(owner, forKey: .owner)
+        try c.encodeIfPresent(stat, forKey: .stat)
     }
 
     init(from decoder: Decoder) throws {

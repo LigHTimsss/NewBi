@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage("appearance") private var appearance = 0
     @AppStorage("customAccentRGB") private var customAccentRGB = 0xFB7299
     @AppStorage("accentIndex") private var accentIndex = 0
+    @AppStorage("homeAutoRefresh") private var homeAutoRefresh = true
     @AppStorage("autoplay") private var autoplay = true
     @AppStorage("cellularAlert") private var cellularAlert = false
     @AppStorage("backgroundPlay") private var backgroundPlay = true
@@ -77,6 +78,15 @@ struct SettingsView: View {
                     }
                     .frame(minHeight: 50)
                 }
+                group {
+                    Toggle("首页自动刷新", isOn: $homeAutoRefresh).frame(minHeight: 50)
+                    Text("关闭后重新打开 App 保留上次首页内容；仍可下拉刷新。首次无内容时会正常加载。")
+                        .font(.footnote)
+                        .foregroundStyle(Theme.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 12)
+                }
+                .tint(accent)
                 // 播放设置
                 group {
                     pickerRow("默认画质", selection: $defaultQuality) {

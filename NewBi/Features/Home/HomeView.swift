@@ -14,14 +14,35 @@ final class FeedModel {
     private(set) var error: String?
     private var page = 1
     private var reachedEnd = false
+    private var account: Int?
+    private var initialized = false
+    private var generation = 0
+
+    func open(account: Int?) async {
+        if initialized, self.account == account, !items.isEmpty { return }
+        generation += 1
+        let version = generation
+        self.account = account
+        initialized = true
+        items = []; page = 1; reachedEnd = false; error = nil; isLoading = true
+        let key = "\(account ?? 0)-\(channel == .recommend ? "recommend" : "hot")"
+        let automatic = UserDefaults.standard.object(forKey: "homeAutoRefresh") as? Bool ?? true
+        let saved = automatic ? nil : await HomeFeedCache.shared.read(key)
+        guard generation == version else { return }
+        isLoading = false
+        if let saved, !saved.items.isEmpty {
+            items = saved.items; page = saved.nextPage; reachedEnd = saved.reachedEnd
+        } else {
+            await refresh()
+        }
+    }
 
     init(channel: Channel) {
         self.channel = channel
     }
 
     func refresh() async {
-        page = 1
-        reachedEnd = false
+        guard !isLoading else { return }
         await load(reset: true)
     }
 
@@ -33,24 +54,32 @@ final class FeedModel {
     private func load(reset: Bool) async {
         guard !isLoading, reset || !reachedEnd else { return }
         isLoading = true
-        defer { isLoading = false }
+        let version = generation
+        let requestedPage = reset ? 1 : page
+        let key = "\(account ?? 0)-\(channel == .recommend ? "recommend" : "hot")"
+        defer { if generation == version { isLoading = false } }
         do {
             let next: [VideoCard]
+            var noMore = false
             switch channel {
             case .recommend:
-                next = try await BiliClient.shared.get(.recommend(page: page), as: RecommendFeed.self).item
+                next = try await BiliClient.shared.get(.recommend(page: requestedPage), as: RecommendFeed.self).item
                     .filter { !$0.bvid.isEmpty } // 过滤广告/直播卡
             case .hot:
-                let feed = try await BiliClient.shared.get(.popular(page: page), as: PopularFeed.self)
-                reachedEnd = feed.noMore
+                let feed = try await BiliClient.shared.get(.popular(page: requestedPage), as: PopularFeed.self)
+                noMore = feed.noMore
                 next = feed.list
             }
+            guard generation == version, !Task.isCancelled else { return }
             let known = reset ? [] : Set(items.map(\.id))
             let fresh = next.filter { !known.contains($0.id) }
             items = reset ? fresh : items + fresh
-            page += 1
+            page = requestedPage + 1
+            reachedEnd = noMore
             error = nil
+            await HomeFeedCache.shared.write(.init(items: items, nextPage: page, reachedEnd: reachedEnd), key: key)
         } catch {
+            guard generation == version, !Task.isCancelled else { return }
             self.error = error.localizedDescription
         }
     }
@@ -104,6 +133,7 @@ struct HomeView: View {
 private struct FeedPage: View {
     let model: FeedModel
     @Environment(\.displayScale) private var scale
+    @Environment(SessionStore.self) private var session
 
     var body: some View {
         ScrollView {
@@ -154,7 +184,7 @@ private struct FeedPage: View {
             }
         }
         .refreshable { await model.refresh() }
-        .task { if model.items.isEmpty { await model.refresh() } }
+        .task(id: session.mid) { await model.open(account: session.mid) }
     }
 }
 
