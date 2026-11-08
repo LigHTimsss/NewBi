@@ -294,6 +294,15 @@ final class DanmakuEngine {
         spawn(item, now: hostTime, own: true)
     }
 
+    /// 直播弹幕：收到就上屏。和视频弹幕走同一套筛选（类型、颜色、屏蔽词、重复、同屏上限）和排轨，
+    /// 只是没有时间轴，不预画（轨道满时第一步就丢掉，不会为进不了屏的弹幕画位图）
+    func showLive(_ item: Danmaku) {
+        guard size.width > 0 else { return }
+        let now = hostTime
+        guard shouldShow(item, now: now) else { return }
+        spawn(item, now: now)
+    }
+
     func pause() {
         retime(speed: 0)
     }

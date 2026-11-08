@@ -14,7 +14,7 @@ struct DownloadsView: View {
     var body: some View {
         let items = tab == .cached ? manager.cached : manager.inProgress
         List {
-            GlassSegmented(options: Tab.allCases, selection: $tab) { item in
+            NativeSegmented(options: Tab.allCases, selection: $tab) { item in
                 let count = item == .cached ? manager.cached.count : manager.inProgress.count
                 return count > 0 ? "\(item.rawValue) \(count)" : item.rawValue
             }

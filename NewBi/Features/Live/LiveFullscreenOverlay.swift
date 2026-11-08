@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// 直播间全屏控件：和视频全屏同一套样式和手势（单击显隐、双击暂停、左半屏亮度、右半屏音量、锁屏、玻璃抽屉），
-/// 去掉直播用不上的：进度条和横滑拖进度、长按倍速、倍速面板、弹幕和评论。
-/// 抽屉里只有画质和更多（定时关闭、画面尺寸、镜像、后台播放、画中画、投屏）
+/// 去掉直播用不上的：进度条和横滑拖进度、长按倍速、倍速面板、评论和发弹幕。
+/// 抽屉里是弹幕设置（直播多一组表情 / 抽奖弹幕屏蔽）、画质和更多（定时关闭、画面尺寸、镜像、后台播放、画中画、投屏）
 struct LiveFullscreenOverlay: View {
     let model: LiveRoomModel
     @Binding var locked: Bool
@@ -210,6 +210,12 @@ struct LiveFullscreenOverlay: View {
                 player.retry()
                 scheduleHide()
             }
+            // 和视频全屏同一组：弹幕开关 + 弹幕设置抽屉
+            iconButton(player.danmakuEnabled ? "text.bubble.fill" : "text.bubble", "弹幕开关",
+                       tint: player.danmakuEnabled ? accent : nil) {
+                player.danmakuEnabled.toggle()
+            }
+            iconButton("slider.horizontal.3", "弹幕设置") { openPanel(.danmaku) }
             Spacer(minLength: 8)
             textButton(qualityName) { openPanel(.quality) }
         }
@@ -235,10 +241,12 @@ struct LiveFullscreenOverlay: View {
         .accessibilityLabel(locked ? "解锁屏幕" : "锁定屏幕")
     }
 
-    private func iconButton(_ icon: String, _ label: String, width: CGFloat = 44, action: @escaping () -> Void) -> some View {
+    private func iconButton(_ icon: String, _ label: String, width: CGFloat = 44, tint: Color? = nil,
+                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 22))
+                .foregroundStyle(tint ?? .white)
                 .contentTransition(.symbolEffect(.replace))
                 .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
                 .frame(width: width, height: 44)

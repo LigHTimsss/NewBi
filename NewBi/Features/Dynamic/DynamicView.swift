@@ -247,7 +247,7 @@ struct DynamicView: View {
                 HStack(alignment: .center) {
                     title
                     Spacer()
-                    GlassSegmented(options: DynamicModel.Filter.allCases, selection: $dynamic.filter, title: \.rawValue)
+                    NativeSegmented(options: DynamicModel.Filter.allCases, selection: $dynamic.filter, title: \.rawValue)
                         .frame(width: 150)
                 }
                 .padding(.horizontal, 16)

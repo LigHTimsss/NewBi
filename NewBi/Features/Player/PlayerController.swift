@@ -718,6 +718,12 @@ final class PlayerController {
         danmaku.showOwn(text)
     }
 
+    /// 直播弹幕到达：开着弹幕、正在播、不在迷你条里才上屏（暂停时不攒，继续播放后从最新的开始）
+    func receiveLive(_ item: Danmaku) {
+        guard isLive, danmakuEnabled, isPlaying, !isMinimized, !isClosed else { return }
+        danmaku.showLive(item)
+    }
+
     func togglePictureInPicture() {
         engine.togglePictureInPicture()
     }

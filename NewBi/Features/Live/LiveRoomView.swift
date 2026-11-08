@@ -12,8 +12,17 @@ final class LiveRoomModel {
     /// 房间资料拿不到（房间号不对、网络问题）
     private(set) var error: String?
 
+    @ObservationIgnored private let danmakuClient = LiveDanmakuClient()
+
     init(roomID: Int) {
         requestedRoomID = roomID
+        let player = player
+        danmakuClient.onDanmaku = { [weak player] danmaku in
+            let defaults = UserDefaults.standard
+            if danmaku.isEmoticon, defaults.bool(forKey: LiveDanmaku.hideEmoticonKey) { return }
+            if danmaku.isLottery, defaults.bool(forKey: LiveDanmaku.hideLotteryKey) { return }
+            player?.receiveLive(danmaku.item)
+        }
     }
 
     var isLive: Bool { info?.isLive ?? false }
@@ -34,8 +43,10 @@ final class LiveRoomModel {
             }
             guard info.isLive else {
                 player.pause()
+                danmakuClient.stop()
                 return
             }
+            danmakuClient.start(roomID: info.roomID)
             // 视频页还在胶囊里播的话先停下，免得两路声音
             VideoStage.shared.model?.player.pause()
             if player.liveRoomID != info.roomID {
@@ -56,6 +67,7 @@ final class LiveRoomModel {
 
     /// 离开直播间：停流、交出锁屏控制
     func close() {
+        danmakuClient.stop()
         player.shutdown()
     }
 
@@ -137,7 +149,7 @@ struct LiveRoomView: View {
     private func stage(safeAreaInsets: EdgeInsets) -> some View {
         ZStack {
             if model.isLive {
-                PlayerSurface(controller: model.player, showsDanmaku: false)
+                PlayerSurface(controller: model.player)
                     .ignoresSafeArea(edges: fullscreen ? .all : [])
                 // 第一帧出来之前盖着直播封面
                 cover
@@ -337,6 +349,7 @@ private struct LiveCompactOverlay: View {
     var onFullscreen: () -> Void
     @State private var showControls = true
     @State private var showMore = false
+    @State private var showDanmakuSettings = false
     @State private var hideTask: Task<Void, Never>?
     @Environment(\.accent) private var accent
 
@@ -363,6 +376,17 @@ private struct LiveCompactOverlay: View {
             .preferredColorScheme(.dark)
             .foregroundStyle(.white)
             .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
+        // 竖屏小窗里的弹幕设置：和全屏抽屉同一个面板
+        .sheet(isPresented: $showDanmakuSettings, onDismiss: scheduleHide) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) { DanmakuSettingsPanel(controller: player) }
+                    .padding(22)
+            }
+            .preferredColorScheme(.dark)
+            .foregroundStyle(.white)
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
         .onAppear { scheduleHide() }
@@ -418,6 +442,20 @@ private struct LiveCompactOverlay: View {
             }
             .accessibilityLabel("刷新直播")
 
+            Button { player.danmakuEnabled.toggle() } label: {
+                Image(systemName: player.danmakuEnabled ? "text.bubble.fill" : "text.bubble")
+                    .foregroundStyle(player.danmakuEnabled ? accent : .white)
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 28, height: 28)
+            }
+            .accessibilityLabel("弹幕开关")
+            .accessibilityValue(player.danmakuEnabled ? "开" : "关")
+
+            Button { showDanmakuSettings = true } label: {
+                Image(systemName: "slider.horizontal.3").frame(width: 28, height: 28)
+            }
+            .accessibilityLabel("弹幕设置")
+
             if let online = model.info?.online, online > 0 {
                 Label(online.biliCount, systemImage: "flame")
                     .labelStyle(CompactLabelStyle())
@@ -457,7 +495,7 @@ private struct LiveCompactOverlay: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, player.isPlaying, !showMore else { return }
+            guard !Task.isCancelled, player.isPlaying, !showMore, !showDanmakuSettings else { return }
             withAnimation(Motion.micro) { showControls = false }
         }
     }

@@ -31,148 +31,9 @@ struct GlowLine: View {
     }
 }
 
-// MARK: - 液态选择器：页面内分段控件（首页底栏使用系统 TabView）
-//
-// 整条只有一个指示器（胶囊 + 发光线是同一个视图），位置由选中项直接算出来，
-// 切换时胶囊和线一起走同一条弹簧曲线，不会一前一后。
-// 按住后指示器浮起成玻璃透镜、跟手滑动，经过的项高亮并轻触反馈，松手即切到手指下那一项；
-// 轻点也走同一个手势：透镜跳到手指处再落回该项。
+// MARK: - 原生主题色分段控件
 
-struct LiquidSelector<Item: View>: View {
-    let count: Int
-    let selected: Int
-    var height: CGFloat
-    /// 放在可滚动页面里时为 true：不独占触摸（页面照常上下滚动），竖向滑动不会误切
-    var allowsScrolling = false
-    var onSelect: (Int) -> Void
-    @ViewBuilder var item: (_ index: Int, _ highlighted: Bool) -> Item
-
-    /// 按住时手指的位置；用 GestureState，手势被页面滚动抢走时也会自动复位
-    private struct Touch {
-        var x: CGFloat?
-        /// 已判定为竖向滚动：本次触摸不再浮起、松手不切换
-        var cancelled = false
-    }
-
-    @GestureState private var touch = Touch()
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var fingerX: CGFloat? { touch.cancelled ? nil : touch.x }
-    private var pressing: Bool { fingerX != nil }
-
-    var body: some View {
-        GeometryReader { geo in
-            let slot = geo.size.width / CGFloat(max(count, 1))
-            let hover = fingerX.map { index(at: $0, slot: slot) } ?? selected
-            // 按住时跟手（限制在两端之内），松开后回到选中项中心
-            let center = fingerX.map { min(max($0, slot / 2), geo.size.width - slot / 2) } ?? (CGFloat(selected) + 0.5) * slot
-
-            let lens = SelectorLensMotion(
-                slot: slot, height: geo.size.height, center: center,
-                pressing: pressing, lifted: pressing && !reduceMotion
-            )
-
-            ZStack(alignment: .topLeading) {
-                SelectorIndicator(lifted: pressing && !reduceMotion)
-                    .modifier(lens)
-
-                HStack(spacing: 0) {
-                    ForEach(0..<count, id: \.self) { index in
-                        item(index, index == hover)
-                            .frame(width: slot, height: geo.size.height)
-                            .contentShape(.rect)
-                            .animation(Motion.micro, value: hover)
-                            .accessibilityElement(children: .combine)
-                            .accessibilityAddTraits(index == selected ? [.isButton, .isSelected] : .isButton)
-                            .accessibilityAction { onSelect(index) }
-                    }
-                }
-            }
-            .contentShape(.rect)
-            .modifier(SelectorGesture(allowsScrolling: allowsScrolling, gesture: drag(slot: slot)))
-            .sensoryFeedback(.selection, trigger: hover) { _, _ in pressing }
-        }
-        .frame(height: height)
-    }
-
-    private func index(at x: CGFloat, slot: CGFloat) -> Int {
-        min(max(Int(x / slot), 0), count - 1)
-    }
-
-    private func drag(slot: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .updating($touch) { value, state, _ in
-                guard !state.cancelled else { return }
-                if allowsScrolling, Self.isVerticalScroll(value) {
-                    state.cancelled = true
-                } else {
-                    state.x = value.location.x
-                }
-            }
-            .onEnded { value in
-                // 松手时再按整段位移判断一次：竖向滚动过的不算点选
-                guard !(allowsScrolling && Self.isVerticalScroll(value)) else { return }
-                onSelect(index(at: value.location.x, slot: slot))
-            }
-    }
-
-    /// 可滚动页面里明显的竖向滑动（交给页面滚动）
-    private static func isVerticalScroll(_ value: DragGesture.Value) -> Bool {
-        let dx = abs(value.translation.width), dy = abs(value.translation.height)
-        return dy > 12 && dy > dx * 1.5
-    }
-}
-
-/// 页面内分段控件的选择指示器位置、缩放和动画。
-private struct SelectorLensMotion: ViewModifier {
-    let slot: CGFloat
-    let height: CGFloat
-    let center: CGFloat
-    let pressing: Bool
-    let lifted: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .frame(width: slot, height: height)
-            .scaleEffect(x: lifted ? 1.08 : 1, y: lifted ? 1.16 : 1)
-            .position(x: center, y: height / 2)
-            .animation(pressing ? .interactiveSpring(response: 0.22, dampingFraction: 0.82) : Motion.component, value: center)
-            .animation(Motion.component, value: pressing)
-    }
-}
-
-/// 独占触摸，或与页面滚动并存。
-private struct SelectorGesture<G: Gesture>: ViewModifier {
-    let allowsScrolling: Bool
-    let gesture: G
-
-    func body(content: Content) -> some View {
-        if allowsScrolling {
-            content.simultaneousGesture(gesture)
-        } else {
-            content.gesture(gesture)
-        }
-    }
-}
-
-/// 指示器：平时是浅色胶囊 + 底部呼吸发光线；按住时浮起成放大的玻璃透镜
-private struct SelectorIndicator: View {
-    var lifted: Bool
-    @Environment(\.accent) private var accent
-
-    var body: some View {
-        Capsule()
-            .fill(Theme.selection.opacity(lifted ? 0.4 : 1))
-            .overlay(alignment: .bottom) { GlowLine(color: accent).padding(.bottom, 3) }
-            .glassEffect(lifted ? .clear.interactive() : .identity, in: .capsule)
-            .shadow(color: .black.opacity(lifted ? 0.18 : 0), radius: lifted ? 10 : 0, y: lifted ? 4 : 0)
-            .allowsHitTesting(false)
-    }
-}
-
-// MARK: - 玻璃分段控件（首页频道条、搜索结果分类）
-
-struct GlassSegmented<Value: Hashable>: View {
+struct NativeSegmented<Value: Hashable>: View {
     let options: [Value]
     @Binding var selection: Value
     let title: (Value) -> String
@@ -180,19 +41,57 @@ struct GlassSegmented<Value: Hashable>: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        // 分段控件多半在可滚动页面里：不独占触摸，竖向滑动照常滚动页面
-        LiquidSelector(count: options.count, selected: options.firstIndex(of: selection) ?? 0, height: 34, allowsScrolling: true) { index in
-            withAnimation(Motion.tab) { selection = options[index] }
-        } item: { index, highlighted in
-            Text(title(options[index]))
-                .font(.system(size: 14, weight: highlighted ? .bold : .medium))
-                .foregroundStyle(highlighted ? accent.accentText(scheme) : Theme.secondaryText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+        NativeSegments(options: options, selection: $selection, titles: options.map(title),
+            color: UIColor(accent), textColor: UIColor(accent.accentText(scheme)))
+            .frame(height: 40)
+    }
+}
+
+private struct NativeSegments<Value: Hashable>: UIViewRepresentable {
+    let options: [Value]
+    @Binding var selection: Value
+    let titles: [String]
+    let color: UIColor
+    let textColor: UIColor
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UISegmentedControl {
+        let control = UISegmentedControl(items: titles)
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        return control
+    }
+
+    func updateUIView(_ control: UISegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        if control.numberOfSegments != titles.count {
+            control.removeAllSegments()
+            for (index, title) in titles.enumerated() { control.insertSegment(withTitle: title, at: index, animated: false) }
+        } else {
+            for (index, title) in titles.enumerated() where control.titleForSegment(at: index) != title {
+                control.setTitle(title, forSegmentAt: index)
+            }
         }
-        .padding(.horizontal, 3)
-        .frame(height: 40)
-        .glassEffect(.regular.interactive(), in: .capsule)
+        let selected = options.firstIndex(of: selection) ?? UISegmentedControl.noSegment
+        if control.selectedSegmentIndex != selected { control.selectedSegmentIndex = selected }
+        // 使用系统着色 API，不覆盖控件背景、不绘制额外选择器或遮罩。
+        control.selectedSegmentTintColor = color.withAlphaComponent(0.22)
+        control.setTitleTextAttributes([.foregroundColor: textColor], for: .selected)
+        control.setTitleTextAttributes([.foregroundColor: UIColor.secondaryLabel], for: .normal)
+        control.tintColor = color
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var parent: NativeSegments
+        init(_ parent: NativeSegments) { self.parent = parent }
+        @objc func changed(_ sender: UISegmentedControl) {
+            guard parent.options.indices.contains(sender.selectedSegmentIndex) else { return }
+            let value = parent.options[sender.selectedSegmentIndex]
+            guard value != parent.selection else { return }
+            withAnimation(Motion.tab) { parent.selection = value }
+        }
     }
 }
 

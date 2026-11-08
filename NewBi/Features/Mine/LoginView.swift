@@ -24,7 +24,7 @@ struct LoginView: View {
     var body: some View {
         VStack(spacing: 18) {
             Text("登录").font(.serif(24)).tracking(2).padding(.top, 28)
-            GlassSegmented(options: Mode.allCases, selection: $mode, title: \.rawValue)
+            NativeSegmented(options: Mode.allCases, selection: $mode, title: \.rawValue)
                 .frame(width: 240)
 
             Group {

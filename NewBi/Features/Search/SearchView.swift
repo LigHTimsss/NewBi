@@ -490,7 +490,7 @@ private struct SearchResults: View {
     private func header(search: SearchModel) -> some View {
         @Bindable var search = search
         return VStack(spacing: 10) {
-            GlassSegmented(options: SearchModel.Kind.allCases, selection: $search.kind, title: \.rawValue)
+            NativeSegmented(options: SearchModel.Kind.allCases, selection: $search.kind, title: \.rawValue)
                 .frame(maxWidth: 220)
             if model.kind == .video {
                 HStack(spacing: 4) {

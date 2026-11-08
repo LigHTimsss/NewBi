@@ -244,9 +244,12 @@ struct SpaceView: View {
             .padding(.bottom, tabPinned ? 8 : 0)
             .frame(maxWidth: .infinity)
             .background {
-                // 与头像姓名胶囊同步淡入实色底，覆盖状态栏、顶栏和吸顶标签栏。
-                // 只改变颜色透明度，不增加实时模糊或逐帧滚动状态更新。
-                Theme.background
+                // 与头像姓名胶囊同步淡入；从顶部实色过渡到标签栏底部半透明。
+                // 使用颜色渐变，不增加实时模糊或逐帧滚动状态更新。
+                LinearGradient(
+                    colors: [Theme.background, Theme.background.opacity(0.5)],
+                    startPoint: .top, endPoint: .bottom
+                )
                     .opacity(collapsed || tabPinned ? 1 : 0)
                     .animation(Motion.micro, value: collapsed || tabPinned)
                     .ignoresSafeArea(edges: .top)
@@ -482,18 +485,13 @@ struct SpaceView: View {
     // MARK: Tab
 
     private var tabBar: some View {
-        Picker("UP 主主页板块", selection: $tab.animation(Motion.tab)) {
-            ForEach(SpaceModel.Tab.allCases, id: \.self) { item in
-                if item == .videos, let count = model.videoCount ?? model.profile?.archiveCount {
-                    Text("投稿 \(count.biliCount)").tag(item)
-                } else {
-                    Text(item.rawValue).tag(item)
-                }
+        NativeSegmented(options: SpaceModel.Tab.allCases, selection: $tab) { item in
+            if item == .videos, let count = model.videoCount ?? model.profile?.archiveCount {
+                return "投稿 \(count.biliCount)"
             }
+            return item.rawValue
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(maxWidth: 380, minHeight: 40)
+        .frame(maxWidth: 380)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 12)
     }

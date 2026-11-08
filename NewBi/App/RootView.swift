@@ -221,7 +221,7 @@ private struct RootTabs: View {
                 DynamicView(refreshToken: dynamicRefresh)
                     .modifier(RootTabPage(active: tab == .dynamic && path.isEmpty))
             }
-            .badge(DynamicBadge.shared.hasNew && tab != .dynamic ? Text("新") : nil)
+            .badge(DynamicBadge.shared.hasNew && tab != .dynamic ? Text("") : nil)
             Tab("我的", systemImage: "person", value: AppTab.mine) {
                 MineView()
                     .modifier(RootTabPage(active: tab == .mine && path.isEmpty))

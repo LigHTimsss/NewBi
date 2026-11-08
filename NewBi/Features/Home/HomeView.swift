@@ -87,14 +87,7 @@ struct HomeView: View {
             GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 10) {
                     GlassAvatarButton(url: session.isLoggedIn ? session.user?.face : nil, label: "个人中心", action: onAvatar)
-                    Picker("首页频道", selection: $channel.animation(Motion.tab)) {
-                        ForEach(Channel.allCases) { item in
-                            Text(item.rawValue).tag(item)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity, minHeight: 40)
+                    NativeSegmented(options: Channel.allCases, selection: $channel, title: \.rawValue)
                     GlassCircleButton(systemImage: "envelope", label: "消息", action: onMessages)
                         .overlay(alignment: .topTrailing) {
                             UnreadBadge(count: MessageBadge.shared.total)

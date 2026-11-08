@@ -215,8 +215,20 @@ private struct PartsPanel: View {
 
 // MARK: - 弹幕设置
 
+/// 弹幕设置面板单独拿出来用（直播间竖屏小窗的弹出层）；内容和全屏抽屉里的完全一样
+struct DanmakuSettingsPanel: View {
+    let controller: PlayerController
+
+    var body: some View {
+        DanmakuPanel(controller: controller)
+    }
+}
+
 private struct DanmakuPanel: View {
     let controller: PlayerController
+    /// 直播间：多一组直播专有的屏蔽（表情、抽奖弹幕）；其余设置和视频弹幕是同一份
+    @AppStorage(LiveDanmaku.hideEmoticonKey) private var hideLiveEmoticon = false
+    @AppStorage(LiveDanmaku.hideLotteryKey) private var hideLiveLottery = false
     @State private var addingKeyword = false
     @State private var keyword = ""
     @Environment(\.accent) private var accent
@@ -281,6 +293,29 @@ private struct DanmakuPanel: View {
                 Toggle("人像防挡", isOn: .constant(false)).labelsHidden().disabled(true)
             }
             .padding(.vertical, 12)
+        }
+
+        if controller.isLive {
+            PanelTitle("直播弹幕")
+            PanelCard {
+                Toggle(isOn: $hideLiveEmoticon) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("屏蔽表情弹幕").font(.system(size: 15))
+                        Text("整条只是一个表情包的弹幕不显示").font(.system(size: 12)).foregroundStyle(secondaryOnDark)
+                    }
+                }
+                .tint(accent)
+                .padding(.vertical, 12)
+                CardDivider()
+                Toggle(isOn: $hideLiveLottery) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("屏蔽抽奖弹幕").font(.system(size: 15))
+                        Text("天选时刻、节奏风暴等活动自动发送的弹幕不显示").font(.system(size: 12)).foregroundStyle(secondaryOnDark)
+                    }
+                }
+                .tint(accent)
+                .padding(.vertical, 12)
+            }
         }
 
         PanelTitle("更多工具")
