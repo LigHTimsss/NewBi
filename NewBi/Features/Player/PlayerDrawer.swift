@@ -8,7 +8,8 @@ private let secondaryOnDark = Color.white.opacity(0.62)
 struct PlayerDrawer: View {
     let panel: PlayerPanel
     let controller: PlayerController
-    let model: VideoDetailModel
+    /// 直播间没有视频详情：为 nil 时「更多」里只留和画面、播放相关的几格，没有选集
+    let model: VideoDetailModel?
     /// 底部面板：屏宽、顶部圆角、高度随内容，超过 `maxHeight` 才滚动
     var sheet = false
     var maxHeight: CGFloat = .infinity
@@ -94,8 +95,8 @@ struct PlayerDrawer: View {
             case .danmaku: DanmakuPanel(controller: controller)
             case .quality: QualityPanel(controller: controller, grid: sheet, onClose: onClose)
             case .speed: SpeedPanel(controller: controller, row: sheet, onClose: onClose)
-            case .more: MorePanel(model: model)
-            case .parts: PartsPanel(model: model)
+            case .more: MorePanel(controller: controller, model: model)
+            case .parts: if let model { PartsPanel(model: model) }
             case .comments: EmptyView()
             }
         }
@@ -532,8 +533,19 @@ private struct SpeedPanel: View {
 // MARK: - 更多
 
 struct MorePanel: View {
-    let model: VideoDetailModel
-    private var controller: PlayerController { model.player }
+    let controller: PlayerController
+    /// nil：直播间。不显示播放方式（直播不会播完）、稍后再看和删除
+    let model: VideoDetailModel?
+
+    init(model: VideoDetailModel) {
+        controller = model.player
+        self.model = model
+    }
+
+    init(controller: PlayerController, model: VideoDetailModel?) {
+        self.controller = controller
+        self.model = model
+    }
     @AppStorage("backgroundPlay") private var backgroundPlay = true
     @Environment(\.accent) private var accent
 
@@ -548,14 +560,16 @@ struct MorePanel: View {
             } label: {
                 tileLabel("timer", controller.sleepDeadline == nil ? "定时关闭" : "定时中", on: controller.sleepDeadline != nil)
             }
-            Menu {
-                Picker("播放方式", selection: Binding(get: { controller.endAction }, set: { controller.endAction = $0 })) {
-                    ForEach(PlayerController.EndAction.allCases, id: \.self) { action in
-                        Label(action.title, systemImage: action.icon).tag(action)
+            if model != nil {
+                Menu {
+                    Picker("播放方式", selection: Binding(get: { controller.endAction }, set: { controller.endAction = $0 })) {
+                        ForEach(PlayerController.EndAction.allCases, id: \.self) { action in
+                            Label(action.title, systemImage: action.icon).tag(action)
+                        }
                     }
+                } label: {
+                    tileLabel(controller.endAction.icon, controller.endAction.title, on: controller.endAction != .next)
                 }
-            } label: {
-                tileLabel(controller.endAction.icon, controller.endAction.title, on: controller.endAction != .next)
             }
             tile(
                 controller.fillScreen ? "rectangle.compress.vertical" : "rectangle.expand.vertical",
@@ -577,22 +591,27 @@ struct MorePanel: View {
                     .background(.white.opacity(0.08), in: .rect(cornerRadius: 16))
                 Text("投屏").font(.system(size: 11)).foregroundStyle(secondaryOnDark)
             }
-            // 和其他七格同一套方块图标；加过之后换成打勾的钟、点亮成主题色
-            Button(action: addToWatchLater) {
-                tileLabel(addedToWatchLater ? "已加稍后看" : "稍后再看", on: addedToWatchLater) {
-                    WatchLaterGlyph(added: addedToWatchLater)
+            if let model {
+                // 和其他七格同一套方块图标；加过之后换成打勾的钟、点亮成主题色
+                Button(action: addToWatchLater) {
+                    tileLabel(addedToWatchLater ? "已加稍后看" : "稍后再看", on: addedToWatchLater) {
+                        WatchLaterGlyph(added: addedToWatchLater)
+                    }
                 }
+                .buttonStyle(PressableStyle())
+                .accessibilityAddTraits(addedToWatchLater ? .isSelected : [])
+                .disabled(aid <= 0)
+                DeleteVideoControl(card: model.deletionCard)
             }
-            .buttonStyle(PressableStyle())
-            .accessibilityAddTraits(addedToWatchLater ? .isSelected : [])
-            .disabled(aid <= 0)
-            DeleteVideoControl(card: model.deletionCard)
         }
     }
 
     @State private var addedToWatchLater = false
 
-    private var aid: Int { model.detail?.aid ?? model.offline?.aid ?? model.card.id }
+    private var aid: Int {
+        guard let model else { return 0 }
+        return model.detail?.aid ?? model.offline?.aid ?? model.card.id
+    }
 
     private func addToWatchLater() {
         // 加过了不再变灰（禁用态会把点亮的主题色压暗），再点只提示

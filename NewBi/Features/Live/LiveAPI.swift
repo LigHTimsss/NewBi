@@ -6,11 +6,19 @@ import Foundation
 enum LiveAPI {
     private static let host = "https://api.live.bilibili.com"
 
+    /// 直播 CDN 认直播站的 Referer
+    static let mediaHeaders = ["User-Agent": BiliClient.userAgent, "Referer": "https://live.bilibili.com/"]
+
+    enum LiveError: LocalizedError {
+        case offline
+        var errorDescription: String? { "主播已下播" }
+    }
+
     private static let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = .shared
         config.httpCookieAcceptPolicy = .always
-        config.httpAdditionalHeaders = ["User-Agent": BiliClient.userAgent, "Referer": "https://live.bilibili.com/"]
+        config.httpAdditionalHeaders = mediaHeaders
         config.timeoutIntervalForRequest = 15
         return URLSession(configuration: config)
     }()
@@ -136,11 +144,18 @@ struct LiveRoomInfo: Decodable, Sendable {
     let description: String
     /// 开播时间「2026-11-08 20:01:33」；未开播是全 0
     let liveTime: String
+    /// 主播粉丝数
+    let attention: Int
+    /// 竖屏直播（手机开播）：全屏时不转横屏
+    let isPortrait: Bool
+    /// 「LPL,英雄联盟,…」
+    let tags: [String]
 
     var isLive: Bool { liveStatus == 1 }
 
     private enum CodingKeys: String, CodingKey {
-        case uid, title, online, keyframe, description
+        case uid, title, online, keyframe, description, attention, tags
+        case isPortrait = "is_portrait"
         case roomID = "room_id"
         case liveStatus = "live_status"
         case areaName = "area_name"
@@ -162,6 +177,10 @@ struct LiveRoomInfo: Decodable, Sendable {
         keyframe = (try? c.decode(String.self, forKey: .keyframe)) ?? ""
         description = (try? c.decode(String.self, forKey: .description)) ?? ""
         liveTime = (try? c.decode(String.self, forKey: .liveTime)) ?? ""
+        attention = c.flexibleInt(.attention)
+        isPortrait = (try? c.decode(Bool.self, forKey: .isPortrait)) ?? (c.flexibleInt(.isPortrait) == 1)
+        tags = ((try? c.decode(String.self, forKey: .tags)) ?? "")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
     /// 简介是 HTML 片段：去掉标签和常见实体，留纯文字

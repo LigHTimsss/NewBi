@@ -33,6 +33,7 @@ enum Route: Hashable {
 struct RootView: View {
     @State private var path = NavigationPath()
     @State private var tab: AppTab = .home
+    @State private var externalLink: ExternalLinkRequest?
     @Environment(SessionStore.self) private var session
     @Environment(\.scenePhase) private var scenePhase
 
@@ -82,8 +83,8 @@ struct RootView: View {
         // 视频页在导航栈外：一层全屏舞台。卡片封面放大成视频页，返回时收成胶囊或缩回卡片，全程同一个画面
         .accessibilityHidden(VideoStage.shared.coversApp)
         .overlay {
-            StageView(capsuleLift: path.isEmpty && tab != .search ? 72 : 8)
-                .animation(VideoStage.shared.showsMini ? Motion.component : nil, value: path.isEmpty && tab != .search)
+            StageView(capsuleLift: path.isEmpty ? 72 : 8)
+                .animation(VideoStage.shared.showsMini ? Motion.component : nil, value: path.isEmpty)
                 .environment(\.openRoute, { route in
                     VideoStage.shared.makeRoom()
                     path.append(route)
@@ -112,6 +113,11 @@ struct RootView: View {
                 return .systemAction
             }
         })
+        .onOpenURL { url in externalLink = ExternalLinkRequest(url: url) }
+        .task(id: externalLink?.id) {
+            guard let request = externalLink else { return }
+            await openExternal(request.url)
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIScene.didActivateNotification)) { note in
             if let scene = note.object as? UIWindowScene { Orientation.restore(in: scene) }
         }
@@ -137,6 +143,62 @@ struct RootView: View {
         }
     }
 
+
+    @MainActor
+    private func openExternal(_ url: URL) async {
+        guard !Task.isCancelled else { return }
+        guard let target = ExternalAppLink.parse(url) else {
+            ToastCenter.shared.show("NewBi 暂不支持此链接")
+            return
+        }
+        switch target {
+        case .home:
+            VideoStage.shared.makeRoom()
+            path = NavigationPath()
+            tab = .home
+        case .space(let mid):
+            VideoStage.shared.makeRoom()
+            path.append(Route.space(mid: mid))
+        case .live(let roomID):
+            VideoStage.shared.makeRoom()
+            path.append(Route.live(roomID: roomID))
+        case .search:
+            VideoStage.shared.makeRoom()
+            path.append(Route.search)
+        case .video(let id, let requestedCid, let page):
+            do {
+                let endpoint: Endpoint = switch id {
+                case .bv(let bvid): .view(bvid: bvid)
+                case .av(let aid): .view(aid: aid)
+                }
+                let detail = try await BiliClient.shared.get(endpoint, as: VideoDetail.self)
+                // 新链接会取消旧 task；迟到的 AV 转 BV / 分 P 查询不能覆盖新目的地。
+                guard !Task.isCancelled else { return }
+                var cid = requestedCid
+                if let page {
+                    let pages = detail.pages ?? []
+                    guard let part = pages.first(where: { $0.page == page }),
+                          requestedCid == nil || requestedCid == part.cid else {
+                        ToastCenter.shared.show("链接指定的分 P 不存在或不匹配")
+                        return
+                    }
+                    cid = part.cid
+                }
+                if let cid, cid != detail.cid && !(detail.pages ?? []).contains(where: { $0.cid == cid }) {
+                    ToastCenter.shared.show("链接指定的分 P 不属于此视频")
+                    return
+                }
+                let card = VideoCard(id: detail.aid, bvid: detail.bvid, cid: cid ?? detail.cid,
+                    title: detail.title, pic: detail.pic, duration: detail.duration,
+                    owner: detail.owner, stat: detail.stat)
+                VideoStage.shared.open(card, from: nil, pinsPart: cid != nil)
+            } catch {
+                guard !Task.isCancelled else { return }
+                ToastCenter.shared.show("打开视频失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
 }
 
 enum AppTab: Hashable {
@@ -147,7 +209,6 @@ enum AppTab: Hashable {
 private struct RootTabs: View {
     @Binding var path: NavigationPath
     @Binding var tab: AppTab
-    @State private var lastContentTab: AppTab = .home
     @State private var dynamicRefresh = 0
 
     var body: some View {
@@ -166,11 +227,9 @@ private struct RootTabs: View {
                     .modifier(RootTabPage(active: tab == .mine && path.isEmpty))
             }
             Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search, role: .search) {
-                // 搜索是真正的系统标签，不用空白占位页再跳转，避免切换时闪白。
-                SearchView(isActive: tab == .search && path.isEmpty, onCancel: { select(lastContentTab) })
-                    .coverSpace()
-                    .miniPlayerInset()
-                    .toolbar(.hidden, for: .tabBar)
+                // role 让系统把搜索放在右侧独立玻璃按钮内。
+                // selection 的 setter 在选中前转为导航操作，不将它作为第四个内容页。
+                Color.clear.accessibilityHidden(true)
             }
         }
         .tabBarMinimizeBehavior(.never)
@@ -180,10 +239,16 @@ private struct RootTabs: View {
     }
 
     private func select(_ item: AppTab) {
+        if item == .search {
+            // 保留当前栏目；用原有 NavigationStack 推入，让搜索框随页面滑入。
+            // 不先选择占位页再回切，也不挂异步 onAppear 跳转。
+            guard path.isEmpty else { return }
+            withAnimation { path.append(Route.search) }
+            return
+        }
         if item == .dynamic, tab == .dynamic || DynamicBadge.shared.hasNew {
             dynamicRefresh += 1
         }
-        if item != .search { lastContentTab = item }
         // 不给 TabView 外挂弹簧或整页平移动画，保留原生选择交互。
         tab = item
     }

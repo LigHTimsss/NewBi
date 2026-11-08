@@ -54,6 +54,10 @@ targets:
     info:
       path: NewBi/Info.plist
       properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.example.newbi.links
+            CFBundleTypeRole: Viewer
+            CFBundleURLSchemes: [newbi, bilibili]
         CFBundleDisplayName: NewBi
         CFBundleDevelopmentRegion: zh-Hans
         UILaunchScreen: {}

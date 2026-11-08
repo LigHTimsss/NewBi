@@ -23,6 +23,10 @@ final class VideoDetailModel {
     private(set) var isLiked = false
     /// 我已投的硬币数（0–2，一个视频最多 2 枚）
     private(set) var coins = 0
+    /// 只由用户操作递增；服务器回填状态不能触发图标弹跳或触觉反馈。
+    private(set) var likeFeedback = 0
+    private(set) var coinFeedback = 0
+    private(set) var favoriteFeedback = 0
     /// 本次在页面里点赞 / 投币带来的计数变化（详情里的统计数不会实时刷新）
     private(set) var likeDelta = 0
     private(set) var coinDelta = 0
@@ -79,6 +83,7 @@ final class VideoDetailModel {
     }
 
     func load() async {
+        let initialFeedback = (like: likeFeedback, coin: coinFeedback, favorite: favoriteFeedback)
         async let relatedTask = try? BiliClient.shared.get(.related(bvid: card.bvid), as: [VideoCard].self)
         // 离线缓存里点开的那一 P：不等详情，立刻播本地文件（没网时也一样）
         var pinnedLocal: DownloadRecord?
@@ -125,11 +130,22 @@ final class VideoDetailModel {
             await relation.refresh()
             if loggedIn {
                 if let state = try? await BiliClient.shared.get(.archiveRelation(aid: detail.aid), as: ArchiveRelation.self) {
-                    isLiked = state.like
-                    coins = state.coin
-                    isFavoured = state.favorite
-                } else {
-                    isFavoured = (try? await BiliClient.shared.get(.favoured(aid: detail.aid), as: FavouredInfo.self).favoured) ?? false
+                    guard !Task.isCancelled, !player.isClosed else { return }
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        // 加载期间用户已完成操作的字段，不再被旧快照覆盖。
+                        if likeFeedback == initialFeedback.like { isLiked = state.like }
+                        if coinFeedback == initialFeedback.coin { coins = state.coin }
+                        if favoriteFeedback == initialFeedback.favorite { isFavoured = state.favorite }
+                    }
+                } else if let state = try? await BiliClient.shared.get(.favoured(aid: detail.aid), as: FavouredInfo.self) {
+                    guard !Task.isCancelled, !player.isClosed else { return }
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        if favoriteFeedback == initialFeedback.favorite { isFavoured = state.favoured }
+                    }
                 }
             }
             onlineText = try? await BiliClient.shared.get(.onlineTotal(bvid: detail.bvid, cid: currentCid ?? detail.cid), as: OnlineTotal.self).total
@@ -203,8 +219,11 @@ final class VideoDetailModel {
     /// 用户在页面里收藏 / 取消收藏（服务器初始状态直接赋值，不计入 favDelta）
     func setFavoured(_ value: Bool) {
         guard value != isFavoured else { return }
-        isFavoured = value
-        favDelta += value ? 1 : -1
+        withAnimation(Motion.micro) {
+            isFavoured = value
+            favDelta += value ? 1 : -1
+            favoriteFeedback += 1
+        }
     }
 
     /// 乐观更新：先变界面，失败再回滚
@@ -215,7 +234,7 @@ final class VideoDetailModel {
         do {
             try await BiliClient.shared.post(.archiveLike, form: ["aid": "\(detail.aid)", "like": target ? "1" : "2", "csrf": csrf])
         } catch {
-            setLiked(!target)
+            setLiked(!target, feedback: false)
             throw error
         }
     }
@@ -225,8 +244,11 @@ final class VideoDetailModel {
         try await BiliClient.shared.post(.coinAdd, form: [
             "aid": "\(detail.aid)", "multiply": "\(count)", "select_like": alsoLike ? "1" : "0", "csrf": csrf,
         ])
-        coins += count
-        coinDelta += count
+        withAnimation(Motion.micro) {
+            coins += count
+            coinDelta += count
+            if count > 0 { coinFeedback += 1 }
+        }
         if alsoLike, !isLiked { setLiked(true) }
     }
 
@@ -237,17 +259,25 @@ final class VideoDetailModel {
         if result.like, !isLiked { setLiked(true) }
         if result.coin {
             let added = max(0, (result.multiply ?? maxCoins) - coins)
-            coins += added
-            coinDelta += added
+            withAnimation(Motion.micro) {
+                coins += added
+                coinDelta += added
+                if added > 0 { coinFeedback += 1 }
+            }
         }
         if result.fav { setFavoured(true) }
         return result
     }
 
-    private func setLiked(_ value: Bool) {
+    private func setLiked(_ value: Bool, feedback: Bool = true) {
         guard value != isLiked else { return }
-        isLiked = value
-        likeDelta += value ? 1 : -1
+        var transaction = Transaction(animation: feedback ? Motion.micro : nil)
+        transaction.disablesAnimations = !feedback
+        withTransaction(transaction) {
+            isLiked = value
+            likeDelta += value ? 1 : -1
+            if feedback { likeFeedback += 1 }
+        }
     }
 
     /// 上报播放进度，让历史记录和其它设备的续播保持同步（离开页面、进入后台、切分 P、关掉 / 换走时调用）。
@@ -1038,7 +1068,7 @@ private struct IntroSection: View {
         HStack {
             likeAction(stat)
             action(model.coins > 0 ? "b.circle.fill" : "b.circle", ((stat.coin ?? 0) + model.coinDelta).biliCount,
-                   on: model.coins > 0, charge: charging) {
+                   on: model.coins > 0, charge: charging, feedback: model.coinFeedback) {
                 if !session.isLoggedIn {
                     toast = "登录后才能投币"
                 } else if model.coins >= model.maxCoins {
@@ -1048,7 +1078,7 @@ private struct IntroSection: View {
                 }
             }
             action(model.isFavoured ? "star.fill" : "star", ((stat.favorite ?? 0) + model.favDelta).biliCount,
-                   on: model.isFavoured, charge: charging) {
+                   on: model.isFavoured, charge: charging, feedback: model.favoriteFeedback) {
                 if session.isLoggedIn { showFavorite = true } else { toast = "登录后才能收藏" }
             }
             cacheAction
@@ -1062,14 +1092,14 @@ private struct IntroSection: View {
                 .accessibilityLabel("分享")
             }
         }
-        .sensoryFeedback(.impact(weight: .light), trigger: model.isLiked)
+        .sensoryFeedback(.impact(weight: .light), trigger: model.likeFeedback)
         .sensoryFeedback(.success, trigger: tripled)
     }
 
     /// 点赞：单击赞 / 取消；长按 1.2 秒一键三连（与 B 站一致）
     private func likeAction(_ stat: VideoStat) -> some View {
         actionLabel(model.isLiked ? "hand.thumbsup.fill" : "hand.thumbsup", ((stat.like ?? 0) + model.likeDelta).biliCount,
-                    on: model.isLiked, charge: charging)
+                    on: model.isLiked, charge: charging, feedback: model.likeFeedback)
             .contentShape(.rect)
             .onTapGesture { like() }
             .onLongPressGesture(minimumDuration: 1.2) {
@@ -1113,16 +1143,16 @@ private struct IntroSection: View {
         }
     }
 
-    private func action(_ icon: String, _ title: String, on: Bool = false, charge: Bool = false, perform: @escaping () -> Void = {}) -> some View {
-        Button(action: perform) { actionLabel(icon, title, on: on, charge: charge) }
+    private func action(_ icon: String, _ title: String, on: Bool = false, charge: Bool = false, feedback: Int? = nil, perform: @escaping () -> Void = {}) -> some View {
+        Button(action: perform) { actionLabel(icon, title, on: on, charge: charge, feedback: feedback) }
             .buttonStyle(PressableStyle())
     }
 
-    private func actionLabel(_ icon: String, _ title: String, on: Bool, charge: Bool) -> some View {
+    private func actionLabel(_ icon: String, _ title: String, on: Bool, charge: Bool, feedback: Int? = nil) -> some View {
         VStack(spacing: 4) {
             Image(systemName: icon)
                 .font(.system(size: 22))
-                .symbolEffect(.bounce, value: on)
+                .symbolEffect(.bounce, value: feedback ?? (on ? 1 : 0))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 34, height: 34)
                 // 三连蓄力环

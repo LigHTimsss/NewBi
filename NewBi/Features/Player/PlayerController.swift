@@ -7,8 +7,10 @@ struct QualityOption: Identifiable, Hashable, Sendable {
     let name: String
     /// 接口在 accept_quality 里列出、但当前账号拿不到流的画质（未登录 / 非大会员）
     var available = true
+    /// 直播的画质编号（150、250、10000…）和视频不是一套，按视频的规则会全被标成大会员：由直播自己给
+    var vipOverride: Bool? = nil
     /// 1080P+ / 1080P60 / 4K / HDR / 杜比视界 / 8K 需要大会员
-    var needsVIP: Bool { id >= 112 }
+    var needsVIP: Bool { vipOverride ?? (id >= 112) }
     /// 按钮上的短名："1080P"
     var shortName: String {
         name.split(separator: " ").first(where: { $0.contains(where: \.isNumber) }).map(String.init) ?? name
@@ -126,6 +128,10 @@ final class PlayerController {
 
     @ObservationIgnored private var stage: Stage = .systemDash
     @ObservationIgnored private var source: (bvid: String, cid: Int)?
+    /// 直播间（真实房间号）。直播没有时长、不能拖进度、不能变速，也没有视频弹幕
+    private(set) var liveRoomID: Int?
+    var isLive: Bool { liveRoomID != nil }
+    private var hasSource: Bool { source != nil || liveRoomID != nil }
     /// 持有即保持本地路由有效；替换时旧会话自动注销
     @ObservationIgnored private var hls: DashHLSSession?
     /// 已离线缓存时优先播本地文件（不联网、不受地址过期影响）
@@ -259,6 +265,36 @@ final class PlayerController {
         await start(startAt: startAt, autoplay: UserDefaults.standard.object(forKey: "autoplay") as? Bool ?? true)
     }
 
+    /// 进直播间：只用系统播放器放 HLS（直播流地址里带签名，过期或断流时重新取一次地址）
+    func loadLive(roomID: Int) async {
+        guard !isClosed else { return }
+        generation += 1
+        engine.pause()
+        source = nil
+        liveRoomID = roomID
+        stage = .systemDash
+        failedCodecs = []
+        lastSameStageRetry = nil
+        offlineFailure = nil
+        localRecord = nil
+        error = nil
+        hasFrame = false
+        duration = 0
+        currentTime = 0
+        isBoosting = false
+        if rate != 1 { setRate(1) }
+        danmaku.clear()
+
+        let alert = UserDefaults.standard.bool(forKey: "cellularAlert")
+        if alert, !Self.cellularConfirmed, NetworkStatus.shared.isCellular {
+            pendingStart = nil
+            needsCellularConfirm = true
+            return
+        }
+        needsCellularConfirm = false
+        await start(startAt: nil, autoplay: true)
+    }
+
     /// 「移动网络播放提醒」里点了继续播放
     func confirmCellular() {
         guard needsCellularConfirm, !isClosed else { return }
@@ -270,26 +306,27 @@ final class PlayerController {
     }
 
     private func start(startAt: Double?, autoplay: Bool) async {
-        guard let source else { return }
+        guard hasSource else { return }
         let generation = generation
-        danmaku.load(cid: source.cid)
-        await play(quality: Self.defaultQuality, resumeAt: startAt)
+        if let source { danmaku.load(cid: source.cid) }
+        await play(quality: isLive ? Self.liveDefaultQuality : Self.defaultQuality, resumeAt: startAt)
         guard !isClosed, generation == self.generation, error == nil else { return }
         if autoplay { engine.play() }
     }
 
     /// 播放区里的「重试」：从第一级重新取流，回到当前位置
     func retry() {
-        guard !isClosed, source != nil, !needsCellularConfirm else { return }
+        guard !isClosed, hasSource, !needsCellularConfirm else { return }
         generation += 1
         let generation = generation
-        stage = Self.initialStage
+        stage = isLive ? .systemDash : Self.initialStage
         failedCodecs = []
         lastSameStageRetry = nil
         offlineFailure = nil
         error = nil
-        let time = currentTime > 0 ? currentTime : nil
-        let qn = quality > 0 ? quality : Self.defaultQuality
+        // 直播重试就是回到最新画面
+        let time = currentTime > 0 && !isLive ? currentTime : nil
+        let qn = quality > 0 ? quality : (isLive ? Self.liveDefaultQuality : Self.defaultQuality)
         Task {
             await play(quality: qn, resumeAt: time)
             guard !isClosed, generation == self.generation, error == nil else { return }
@@ -298,10 +335,10 @@ final class PlayerController {
     }
 
     func changeQuality(_ qn: Int) async {
-        guard qn != quality, !isClosed, source != nil else { return }
+        guard qn != quality, !isClosed, hasSource else { return }
         generation += 1
         let generation = generation
-        let time = currentTime
+        let time: Double? = isLive ? nil : currentTime
         let wasPlaying = isPlaying
         await play(quality: qn, resumeAt: time)
         if wasPlaying, !isClosed, generation == self.generation { engine.play() }
@@ -323,20 +360,27 @@ final class PlayerController {
     /// 取流并装载。所有结果在最后一个 await 之后、核对世代通过才写入（hls、画质、时长、引擎），
     /// 旧的一 P / 旧画质的请求晚回来时直接丢弃（它建的本地代理会话随之释放）
     private func play(quality qn: Int, resumeAt time: Double?) async {
-        guard let source, !isClosed else { return }
+        guard hasSource, !isClosed else { return }
+        let source = source
         let generation = generation
         do {
             let prepared: Prepared
-            switch stage {
-            case .systemDash, .ffmpegDash:
-                if let record = localRecord {
-                    prepared = try await prepareLocal(record)
-                } else {
-                    // FFmpeg 不受系统解码器限制，不沿用系统引擎的失败编码
-                    prepared = try await prepareDash(source, quality: qn, excluding: stage == .systemDash ? failedCodecs : [])
+            if let liveRoomID {
+                prepared = try await prepareLive(liveRoomID, quality: qn)
+            } else if let source {
+                switch stage {
+                case .systemDash, .ffmpegDash:
+                    if let record = localRecord {
+                        prepared = try await prepareLocal(record)
+                    } else {
+                        // FFmpeg 不受系统解码器限制，不沿用系统引擎的失败编码
+                        prepared = try await prepareDash(source, quality: qn, excluding: stage == .systemDash ? failedCodecs : [])
+                    }
+                case .systemMP4:
+                    prepared = try await prepareMP4(source, quality: qn)
                 }
-            case .systemMP4:
-                prepared = try await prepareMP4(source, quality: qn)
+            } else {
+                return
             }
             // 取流期间已被关掉，或用户又切了 P / 画质：作废
             guard !isClosed, generation == self.generation else { return }
@@ -348,10 +392,12 @@ final class PlayerController {
             switchEngine(to: stage.engine)
             itemWasReady = false
             reachedEnd = false
-            engine.load(url: prepared.url, headers: prepared.headers, startAt: time)
+            // 直播的时间轴是滑动窗口：不按旧位置 seek，直接从最新画面开始
+            let startAt = isLive ? nil : time
+            engine.load(url: prepared.url, headers: prepared.headers, startAt: startAt)
             // 已装载的这一项和它的时钟一起提交：进度上报只采样这里（不会把上一 P 的进度记到新 CID 上）
-            playingCid = source.cid
-            currentTime = time ?? 0
+            playingCid = source?.cid
+            currentTime = startAt ?? 0
             bufferedTime = 0
             streamLabel = "\(engine.kind.rawValue) · \(prepared.label)"
             error = nil
@@ -364,6 +410,29 @@ final class PlayerController {
                 self.error = Self.describe(error, offline: localRecord != nil)
             }
         }
+    }
+
+    /// 直播默认要原画；服务器按登录状态给能给的最高一档（未登录多为 720P）
+    private static let liveDefaultQuality = 10000
+
+    /// 直播：取 HLS 地址（优先 fmp4 + AVC）。直播没有时长，画质只列这一路流能切到的几档
+    private func prepareLive(_ roomID: Int, quality qn: Int) async throws -> Prepared {
+        let info = try await LiveAPI.playInfo(roomID: roomID, qn: qn)
+        guard info.liveStatus == 1 else { throw LiveAPI.LiveError.offline }
+        guard let codec = info.hls, let url = codec.url else { throw DashError.noStream }
+        let options = info.qualities
+            .filter { codec.acceptQn.contains($0.qn) }
+            .map { QualityOption(id: $0.qn, name: $0.desc, vipOverride: false) }
+        return Prepared(
+            url: url,
+            headers: LiveAPI.mediaHeaders,
+            label: "直播 · HLS · \(codec.codecName.uppercased())",
+            session: nil,
+            codec: nil,
+            quality: codec.currentQn,
+            duration: 0,
+            qualities: options
+        )
     }
 
     /// 离线缓存：画质固定为缓存时选的那一档
@@ -437,6 +506,7 @@ final class PlayerController {
     private static func describe(_ error: Error, offline: Bool) -> String {
         if offline { return "离线缓存无法播放：\(error.localizedDescription)" }
         switch error {
+        case let live as LiveAPI.LiveError: return live.localizedDescription
         case BiliError.api(let code, let message):
             switch code {
             case -101: return "登录已失效，请重新登录后播放"
@@ -489,6 +559,11 @@ final class PlayerController {
             }
             recover()
         case .ended:
+            // 直播流播到头 = 主播下播（或断流）：不连播、不循环
+            if isLive {
+                error = LiveAPI.LiveError.offline.localizedDescription
+                return
+            }
             reachedEnd = true
             switch endAction {
             case .loop:
@@ -533,6 +608,8 @@ final class PlayerController {
     }
 
     private func advanceStage() -> Bool {
+        // 直播只走系统播放器：同一级重新取地址就是全部的恢复手段
+        if isLive { return false }
         switch stage {
         case .systemDash:
             let ffmpegAllowed = Self.enginePreference != "system" && EngineFactory.ffmpegAvailable
@@ -585,6 +662,8 @@ final class PlayerController {
     }
 
     func setRate(_ value: Float) {
+        // 直播只能 1 倍速
+        guard !isLive || value == 1 else { return }
         rate = value
         engine.setRate(value)
         if isPlaying { danmaku.resume(rate: value) }
@@ -593,7 +672,7 @@ final class PlayerController {
 
     /// 长按画面临时 2 倍速（弹幕一起加速）
     func setBoost(_ on: Bool) {
-        guard on != isBoosting, isPlaying || !on else { return }
+        guard on != isBoosting, isPlaying || !on, !isLive || !on else { return }
         // 本来就在 2 倍：没有更快的可加
         if on, rate >= boostRate { return }
         isBoosting = on
@@ -619,7 +698,7 @@ final class PlayerController {
     }
 
     func sendDanmaku(_ text: String) async throws {
-        guard let source else { return }
+        guard let source, !isLive else { return }
         guard let csrf = BiliClient.csrfToken else { throw BiliError.api(code: -101, message: "登录后才能发送弹幕") }
         try await BiliClient.shared.post(.postDanmaku, form: [
             "type": "1", "oid": "\(source.cid)", "bvid": source.bvid, "msg": text,

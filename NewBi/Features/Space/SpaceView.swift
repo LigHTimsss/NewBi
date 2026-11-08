@@ -482,13 +482,18 @@ struct SpaceView: View {
     // MARK: Tab
 
     private var tabBar: some View {
-        GlassSegmented(options: SpaceModel.Tab.allCases, selection: $tab) { item in
-            if item == .videos, let count = model.videoCount ?? model.profile?.archiveCount {
-                return "投稿 \(count.biliCount)"
+        Picker("UP 主主页板块", selection: $tab.animation(Motion.tab)) {
+            ForEach(SpaceModel.Tab.allCases, id: \.self) { item in
+                if item == .videos, let count = model.videoCount ?? model.profile?.archiveCount {
+                    Text("投稿 \(count.biliCount)").tag(item)
+                } else {
+                    Text(item.rawValue).tag(item)
+                }
             }
-            return item.rawValue
         }
-        .frame(maxWidth: 380)
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 380, minHeight: 40)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 12)
     }

@@ -204,9 +204,6 @@ final class SearchModel {
 
 /// 搜索页：从底部搜索按钮进入
 struct SearchView: View {
-    /// 原生搜索标签离开时收起键盘；导航推入的搜索页沿用默认行为。
-    var isActive = true
-    var onCancel: (() -> Void)? = nil
     @State private var model = SearchModel()
     @State private var entryComplete = false
     @FocusState private var focused: Bool
@@ -232,7 +229,7 @@ struct SearchView: View {
         .onChange(of: model.query) { model.queryChanged() }
         .background {
             SearchEntryObserver {
-                guard isActive, !entryComplete else { return }
+                guard !entryComplete else { return }
                 entryComplete = true
                 // 系统键盘第一次安装输入法时开销较大，等导航推入结束再自动聚焦。
                 if model.submitted == nil { focused = true }
@@ -240,16 +237,6 @@ struct SearchView: View {
             .frame(width: 0, height: 0)
         }
         .task(id: entryComplete) { if entryComplete { await model.loadHot() } }
-        .task(id: isActive) {
-            // 标签切换没有导航推入完成回调；即便系统提前创建内容，也只激活当前搜索页。
-            guard onCancel != nil, isActive else { return }
-            entryComplete = true
-            if model.submitted == nil { focused = true }
-        }
-        .onChange(of: isActive) { _, active in
-            if !active { focused = false }
-            else if entryComplete, model.submitted == nil { focused = true }
-        }
         .onDisappear { focused = false }
     }
 
@@ -282,7 +269,7 @@ struct SearchView: View {
 
             Button("取消") {
                 focused = false
-                if let onCancel { onCancel() } else { dismiss() }
+                dismiss()
             }
                 .font(.system(size: 16))
                 .foregroundStyle(.primary)

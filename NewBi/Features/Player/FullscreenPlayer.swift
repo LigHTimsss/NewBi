@@ -90,7 +90,7 @@ struct FullscreenOverlay: View {
                     .transition(.opacity)
             }
 
-            FullscreenPanelLayer(panel: $panel, model: model, close: { closePanel(then: $0) }, changed: scheduleHide)
+            FullscreenPanelLayer(panel: $panel, controller: player, model: model, close: { closePanel(then: $0) }, changed: scheduleHide)
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { controlsFrame = $0 }
         .environment(\.colorScheme, .dark)
@@ -523,7 +523,7 @@ private struct FullscreenProgress: View {
 
 // MARK: - 手势提示
 
-private struct HUDView: View {
+struct HUDView: View {
     let hud: GestureHUD
     @Environment(\.accent) private var accent
 
@@ -582,9 +582,11 @@ private struct HUDView: View {
     }
 }
 
-private struct FullscreenPanelLayer: View {
+/// 全屏里的面板层：视频页和直播间共用。直播间没有视频详情（model 为 nil），也就没有评论、选集
+struct FullscreenPanelLayer: View {
     @Binding var panel: PlayerPanel?
-    let model: VideoDetailModel
+    let controller: PlayerController
+    let model: VideoDetailModel?
     let close: ((@MainActor () -> Void)?) -> Void
     let changed: () -> Void
 
@@ -614,9 +616,9 @@ private struct FullscreenPanelLayer: View {
                 if let panel, !rises(panel) {
                     Group {
                         if panel == .comments {
-                            CommentsPanel(model: model.comments) { close(nil) }
+                            if let model { CommentsPanel(model: model.comments) { close(nil) } }
                         } else {
-                            PlayerDrawer(panel: panel, controller: model.player, model: model) { close($0) }
+                            PlayerDrawer(panel: panel, controller: controller, model: model) { close($0) }
                         }
                     }
                     // 评论浮窗宽度可伸缩：先占满它要的宽度，剩下的才给左边的空白
@@ -631,7 +633,7 @@ private struct FullscreenPanelLayer: View {
                 Spacer(minLength: 0)
                 if let panel, rises(panel) {
                     PlayerDrawer(
-                        panel: panel, controller: model.player, model: model,
+                        panel: panel, controller: controller, model: model,
                         sheet: true, maxHeight: size.height * 0.58, bottomInset: bottomInset
                     ) { close($0) }
                     .transition(.move(edge: .bottom))
