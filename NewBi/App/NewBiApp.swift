@@ -6,7 +6,8 @@ struct NewBiApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var session = SessionStore()
     @AppStorage("accentIndex") private var accentIndex = 0
-    /// 0 跟随系统 · 1 浅色 · 2 深色
+    @AppStorage("customAccentRGB") private var customAccentRGB = 0xFB7299
+    /// 0 系统 · 1 浅色 · 2 深色 · 3 柔和浅色 · 4 柔和深色
     @AppStorage("appearance") private var appearance = 0
 
     init() {
@@ -18,12 +19,13 @@ struct NewBiApp: App {
 
     var body: some Scene {
         WindowGroup {
-            let accent = Theme.accents[min(max(accentIndex, 0), Theme.accents.count - 1)]
+            let accent = Theme.accent(index: accentIndex, custom: customAccentRGB)
             RootView()
                 .environment(session)
                 .environment(\.accent, accent)
                 .tint(accent)
-                .preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
+                .preferredColorScheme([1, 3].contains(appearance) ? .light : [2, 4].contains(appearance) ? .dark : nil)
+                .onChange(of: appearance, initial: true) { _, value in AppearancePalette.shared.mode = value }
                 .task { await session.bootstrap() }
         }
     }

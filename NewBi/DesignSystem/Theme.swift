@@ -3,10 +3,16 @@ import SwiftUI
 /// 设计令牌，对应设计稿「视频 App · Liquid Glass UI」中的 CSS 变量
 enum Theme {
     static let pink = Color(hex: 0xFB7299)
-    /// 设计稿提供的四个强调色选项
-    static let accents: [Color] = [pink, Color(hex: 0x00AEEC), Color(hex: 0x0A84FF), Color(hex: 0xFF9F0A)]
+    /// 使用原有索引 0 / 2，避免旧设置中的苹果蓝变成其他颜色。
+    static let accents: [Color] = [pink, pink, Color(uiColor: .systemBlue)]
+    static func accent(index: Int, custom: Int) -> Color {
+        if index == 4 { return Color(hex: UInt32(clamping: custom) & 0xFFFFFF) }
+        return index == 2 ? Color(uiColor: .systemBlue) : pink
+    }
 
-    static let background = Color.dynamic(light: .white, dark: .black)
+    @MainActor static var background: Color {
+        AppearancePalette.shared.soft ? Color(uiColor: .secondarySystemBackground) : Color(uiColor: .systemBackground)
+    }
     /// --fg2
     static let secondaryText = Color.dynamic(
         light: UIColor(red: 60 / 255, green: 60 / 255, blue: 67 / 255, alpha: 0.78),
@@ -20,10 +26,20 @@ enum Theme {
         dark: UIColor(white: 1, alpha: 0.12)
     )
     /// --card：分组卡片
-    static let card = Color.dynamic(
+    private static let standardCard = Color.dynamic(
         light: UIColor(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255, alpha: 1),
         dark: UIColor(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255, alpha: 1)
     )
+    @MainActor static var card: Color {
+        AppearancePalette.shared.soft ? Color(uiColor: .tertiarySystemBackground) : standardCard
+    }
+}
+
+@MainActor @Observable
+final class AppearancePalette {
+    static let shared = AppearancePalette()
+    var mode = UserDefaults.standard.integer(forKey: "appearance")
+    var soft: Bool { mode == 3 || mode == 4 }
 }
 
 /// 动效令牌，对应「动效规范」画板

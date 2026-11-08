@@ -36,7 +36,7 @@ struct MineView: View {
         HStack(spacing: 0) {
             // 深色时是月亮，浅色时是太阳：图标就是当前的外观
             toolButton(scheme == .dark ? "moon.fill" : "sun.max.fill", scheme == .dark ? "深色模式，点按切换为浅色" : "浅色模式，点按切换为深色") {
-                withAnimation(Motion.component) { appearance = scheme == .dark ? 1 : 2 }
+                withAnimation(Motion.component) { appearance = appearance == 3 ? 4 : appearance == 4 ? 3 : scheme == .dark ? 1 : 2 }
             }
         }
         .font(.system(size: 18))

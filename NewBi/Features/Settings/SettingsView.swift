@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
     @AppStorage("appearance") private var appearance = 0
+    @AppStorage("customAccentRGB") private var customAccentRGB = 0xFB7299
     @AppStorage("accentIndex") private var accentIndex = 0
     @AppStorage("autoplay") private var autoplay = true
     @AppStorage("cellularAlert") private var cellularAlert = false
@@ -25,6 +26,15 @@ struct SettingsView: View {
     /// 自动：系统播放器失败时切 FFmpeg；FFmpeg 不支持系统画中画
     @AppStorage("enginePreference") private var enginePreference = "auto"
 
+    private var customAccent: Binding<Color> {
+        Binding(get: { Color(hex: UInt32(clamping: customAccentRGB) & 0xFFFFFF) }, set: { color in
+            let resolved = color.resolve(in: EnvironmentValues())
+            func channel(_ value: Float) -> Int { Int((min(max(value, 0), 1) * 255).rounded()) }
+            customAccentRGB = (channel(resolved.red) << 16) | (channel(resolved.green) << 8) | channel(resolved.blue)
+            accentIndex = 4
+        })
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
@@ -36,6 +46,8 @@ struct SettingsView: View {
                             Text("跟随系统").tag(0)
                             Text("浅色").tag(1)
                             Text("深色").tag(2)
+                            Text("柔和浅色").tag(3)
+                            Text("柔和深色").tag(4)
                         }
                         .labelsHidden()
                     }
@@ -44,7 +56,7 @@ struct SettingsView: View {
                     HStack {
                         Text("主题色")
                         Spacer()
-                        ForEach(Theme.accents.indices, id: \.self) { index in
+                        ForEach([0, 2], id: \.self) { index in
                             Button {
                                 withAnimation(Motion.component) { accentIndex = index }
                             } label: {
@@ -56,8 +68,12 @@ struct SettingsView: View {
                                     .frame(width: 44, height: 44)
                             }
                             .buttonStyle(PressableStyle())
-                            .accessibilityLabel("主题色 \(index + 1)")
+                            .accessibilityLabel(index == 0 ? "粉色" : "苹果蓝")
                         }
+                        ColorPicker("自定义主题色", selection: customAccent, supportsOpacity: false)
+                            .labelsHidden()
+                            .frame(width: 44, height: 44)
+                            .overlay { if accentIndex == 4 { Circle().stroke(.primary, lineWidth: 1.5).padding(6).allowsHitTesting(false) } }
                     }
                     .frame(minHeight: 50)
                 }
