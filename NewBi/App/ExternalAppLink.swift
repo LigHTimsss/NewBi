@@ -27,6 +27,13 @@ enum ExternalAppLink: Equatable, Sendable {
             guard query[item.name] == nil, let value = item.value else { return nil }
             query[item.name] = value
         }
+        // B 站 H5 getVideoExtra 使用 page=p-1；Scheme 的 page 从 0 开始，
+        // 归一化为详情 API 的 1-based page。HTTPS 的 p 与 newbi 的约定保持不变。
+        if scheme == "bilibili", host == "video", let raw = query["page"] {
+            guard !raw.isEmpty, raw.utf8.allSatisfy({ (48...57).contains($0) }),
+                  let index = Int(raw), index < Int.max else { return nil }
+            query["page"] = String(index + 1)
+        }
         let path = parts.path.split(separator: "/").map(String.init)
         if scheme == "https" || scheme == "http" {
             // 仅供 browser?url= 包装链接解析；注册 Scheme 不会接管 HTTPS 通用链接。
