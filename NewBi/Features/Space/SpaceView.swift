@@ -29,12 +29,21 @@ final class SpaceModel {
     @ObservationIgnored private var locationLoaded = false
     /// 投稿里搜索的关键词（空为不搜）
     private(set) var keyword = ""
-    private(set) var topVideo: VideoCard?
-    private(set) var masterpieces: [VideoCard] = []
+    private var loadedTopVideo: VideoCard?
+    var topVideo: VideoCard? {
+        loadedTopVideo.flatMap { OwnedContentDeletion.shared.videos.contains($0.id) ? nil : $0 }
+    }
+    private var loadedMasterpieces: [VideoCard] = []
+    var masterpieces: [VideoCard] { loadedMasterpieces.filter { !OwnedContentDeletion.shared.videos.contains($0.id) } }
     /// 主页「最近投稿」：首次按最新发布加载的前 6 个
-    private(set) var recent: [SpaceVideo] = []
-    private(set) var videos: [SpaceVideo] = []
-    private(set) var videoCount: Int?
+    private var loadedRecent: [SpaceVideo] = []
+    private var loadedVideos: [SpaceVideo] = []
+    private var loadedVideoCount: Int?
+    var recent: [SpaceVideo] { loadedRecent.filter { !OwnedContentDeletion.shared.videos.contains($0.id) } }
+    var videos: [SpaceVideo] { loadedVideos.filter { !OwnedContentDeletion.shared.videos.contains($0.id) } }
+    var videoCount: Int? {
+        loadedVideoCount.map { max(0, $0 - (loadedVideos.count - videos.count)) }
+    }
     private(set) var isLoadingVideos = false
     private(set) var videosError: String?
     private(set) var error: String?
@@ -42,7 +51,7 @@ final class SpaceModel {
         didSet { if order != oldValue { loadVideos(reset: true) } }
     }
 
-    var hasMoreVideos: Bool { videoCount.map { videos.count < $0 } ?? true }
+    var hasMoreVideos: Bool { loadedVideoCount.map { loadedVideos.count < $0 } ?? true }
     var followerCount: Int { (profile?.card.fans ?? 0) + relation.followerDelta }
 
     @ObservationIgnored private var page = 1
@@ -106,8 +115,8 @@ final class SpaceModel {
         } catch {
             self.error = error.localizedDescription
         }
-        topVideo = await top
-        masterpieces = (await master ?? []).filter { !$0.bvid.isEmpty && $0.bvid != topVideo?.bvid }
+        loadedTopVideo = await top
+        loadedMasterpieces = (await master ?? []).filter { !$0.bvid.isEmpty && $0.bvid != topVideo?.bvid }
         accInfo = await acc
     }
 
@@ -133,7 +142,7 @@ final class SpaceModel {
         if let acc = try? await BiliClient.shared.get(.spaceAccInfo(mid: mid), as: SpaceAccInfo.self) { accInfo = acc }
         switch tab {
         case .home, .videos:
-            if keyword.isEmpty { recent = [] }
+            if keyword.isEmpty { loadedRecent = [] }
             loadVideos(reset: true)
             await loadTask?.value
         case .dynamic:
@@ -154,8 +163,8 @@ final class SpaceModel {
         if reset {
             loadTask?.cancel()
             page = 1
-            videos = []
-            videoCount = nil
+            loadedVideos = []
+            loadedVideoCount = nil
             videosError = nil
             isLoadingVideos = false
         }
@@ -166,10 +175,10 @@ final class SpaceModel {
             do {
                 let result = try await BiliClient.shared.get(.spaceVideos(mid: mid, page: page, order: order.rawValue, keyword: keyword), as: SpaceArcSearch.self)
                 guard !Task.isCancelled else { return }
-                let known = Set(videos.map(\.id))
-                videos += (result.list.vlist ?? []).filter { !known.contains($0.id) }
-                videoCount = result.page.count
-                if order == .pubdate, keyword.isEmpty, recent.isEmpty { recent = Array(videos.prefix(6)) }
+                let known = Set(loadedVideos.map(\.id))
+                loadedVideos += (result.list.vlist ?? []).filter { !known.contains($0.id) }
+                loadedVideoCount = result.page.count
+                if order == .pubdate, keyword.isEmpty, recent.isEmpty { loadedRecent = Array(videos.prefix(6)) }
                 self.page = page + 1
                 videosError = nil
             } catch {
@@ -187,11 +196,11 @@ struct SpaceView: View {
     @State private var model: SpaceModel
     @State private var tab: SpaceModel.Tab = .home
     @State private var headerHeight: CGFloat = 0
-    @State private var restingHeaderOffset: CGFloat = 0
+    @State private var scroll: SpaceScrollCoordinator
     @State private var visited: Set<SpaceModel.Tab> = []
     @State private var signExpanded = false
-    @State private var collapsed = false
-    @State private var tabPinned = false
+    private var collapsed: Bool { scroll.compact }
+    private var tabPinned: Bool { scroll.pinned }
     @State private var topInset: CGFloat = 0
     @State private var toast: String?
     /// 搜 TA 的投稿
@@ -207,6 +216,7 @@ struct SpaceView: View {
         _model = State(initialValue: SpaceModel(mid: mid))
         _tab = State(initialValue: initialTab)
         _visited = State(initialValue: [initialTab])
+        _scroll = State(initialValue: SpaceScrollCoordinator(initialPage: initialTab))
     }
 
     /// 顶栏底边（全局坐标）：Tab 栏滚到这里就吸顶
@@ -231,8 +241,20 @@ struct SpaceView: View {
                     tabBar.transition(.opacity)
                 }
             }
+            .padding(.bottom, tabPinned ? 8 : 0)
+            .frame(maxWidth: .infinity)
+            .background {
+                // 与头像姓名胶囊同步淡入实色底，覆盖状态栏、顶栏和吸顶标签栏。
+                // 只改变颜色透明度，不增加实时模糊或逐帧滚动状态更新。
+                Theme.background
+                    .opacity(collapsed || tabPinned ? 1 : 0)
+                    .animation(Motion.micro, value: collapsed || tabPinned)
+                    .ignoresSafeArea(edges: .top)
+                    .allowsHitTesting(false)
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
+        .onChange(of: pinOffset, initial: true) { _, value in scroll.setCollapseLimit(value) }
         .background(Theme.background)
         .toolbar(.hidden, for: .navigationBar)
         .toast($toast)
@@ -299,9 +321,7 @@ struct SpaceView: View {
             let card = profile.card
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .bottom, spacing: 16) {
-                    RemoteImage(url: card.face, size: CGSize(width: 84, height: 84))
-                        .frame(width: 84, height: 84)
-                        .clipShape(.circle)
+                    LiveAvatar(mid: model.mid, url: card.face, size: 84)
                         .padding(3)
                         .background(Theme.background, in: .circle)
                     VStack(spacing: 10) {
@@ -478,31 +498,20 @@ struct SpaceView: View {
             ScrollView(.horizontal) {
                 HStack(spacing: 0) {
                     ForEach(SpaceModel.Tab.allCases, id: \.self) { page in
-                        SpacePageScroll(
-                            active: page == tab,
-                            pinOffset: pinOffset,
-                            restingHeaderOffset: $restingHeaderOffset,
-                            report: { pinned, compact in
-                                tabPinned = pinned
-                                if collapsed != compact {
-                                    withAnimation(Motion.micro) { collapsed = compact }
-                                }
-                            }
-                        ) {
+                        SpacePageScroll(page: page, scroll: scroll) {
+                            pageHeader
+                        } content: {
                             VStack(alignment: .leading, spacing: 0) {
-                                pageHeader(for: page)
-                                VStack(alignment: .leading, spacing: 0) {
-                                    if page == tab, page == .videos || page == .dynamic,
-                                       searching || !model.keyword.isEmpty || !model.dynamics.keyword.isEmpty {
-                                        searchBar
-                                    }
-                                    if page == tab || visited.contains(page) {
-                                        tabContent(for: page)
-                                    }
+                                if page == tab, page == .videos || page == .dynamic,
+                                   searching || !model.keyword.isEmpty || !model.dynamics.keyword.isEmpty {
+                                    searchBar
                                 }
-                                .padding(.bottom, 40)
-                                .frame(minHeight: max(0, viewport.size.height - topBarBottom), alignment: .top)
+                                if page == tab || visited.contains(page) {
+                                    tabContent(for: page)
+                                }
                             }
+                            .padding(.bottom, 40)
+                            .frame(minHeight: max(0, viewport.size.height - topBarBottom), alignment: .top)
                         }
                         .refreshable { await model.refresh(page) }
                         .frame(width: viewport.size.width, height: viewport.size.height)
@@ -526,6 +535,7 @@ struct SpaceView: View {
                 }
             ), anchor: .leading)
             .onChange(of: tab, initial: true) { _, selected in
+                scroll.select(selected)
                 let tabs = SpaceModel.Tab.allCases
                 guard let index = tabs.firstIndex(of: selected) else { return }
                 visited.formUnion(tabs[max(0, index - 1)...min(tabs.count - 1, index + 1)])
@@ -534,14 +544,14 @@ struct SpaceView: View {
     }
 
     @ViewBuilder
-    private func pageHeader(for page: SpaceModel.Tab) -> some View {
+    private var pageHeader: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                SpaceBanner(url: model.profile?.space?.lImg)
+                SpaceBanner(url: model.profile?.space?.lImg, scroll: scroll)
                 profile
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                if page == tab { headerHeight = height }
+                headerHeight = height
             }
             tabBar
                 .opacity(tabPinned ? 0 : 1)
@@ -549,7 +559,8 @@ struct SpaceView: View {
                 .accessibilityHidden(tabPinned)
                 .padding(.vertical, 12)
         }
-        // 横滑只移动正文；各页裁剪出同一个头图的对应部分。
+        .background(Theme.background)
+        // 各页裁剪出同一位置的页头；横向分页只移动正文。
         .visualEffect { header, geometry in
             header.offset(x: -geometry.frame(in: .named("space-horizontal-pager")).minX)
         }
@@ -612,42 +623,137 @@ private struct SpacePagerPopPriority: UIViewRepresentable {
     }
 }
 
-/// 每个标签持有自己的纵向位置。横向容器只使用屏幕尺寸。
-private struct SpacePageScroll<Content: View>: View {
-    let active: Bool
-    let pinOffset: CGFloat
-    @Binding var restingHeaderOffset: CGFloat
-    let report: (Bool, Bool) -> Void
+/// 逐帧状态只由页头读取；列表只在滚动结束或切换板块时对齐一次。
+@MainActor
+@Observable
+private final class SpaceScrollCoordinator {
+    private(set) var headerOffset: CGFloat = 0
+    private(set) var pullDown: CGFloat = 0
+    private(set) var pinned = false
+    private(set) var compact = false
+    private(set) var alignmentRevision = 0
+    @ObservationIgnored private var state: SpaceScrollState<SpaceModel.Tab>
+
+    init(initialPage: SpaceModel.Tab) { state = SpaceScrollState(activePage: initialPage) }
+
+    func offset(for page: SpaceModel.Tab) -> CGFloat { state.scrollOffset(for: page) }
+
+    func select(_ page: SpaceModel.Tab) {
+        state.select(page)
+        pullDown = 0
+        alignmentRevision += 1
+    }
+
+    func setCollapseLimit(_ value: CGFloat) {
+        state.setCollapseLimit(value)
+        publishHeader()
+        alignmentRevision += 1
+    }
+
+    func moved(_ page: SpaceModel.Tab, from old: CGFloat, to new: CGFloat) {
+        guard page == state.activePage else { return }
+        state.scroll(page, from: old, to: new)
+        pullDown = state.headerOffset == 0 ? max(0, -new) : 0
+        publishHeader()
+    }
+
+    func settled(_ page: SpaceModel.Tab) {
+        guard page == state.activePage else { return }
+        pullDown = 0
+        // 连深处的板块也只对齐共享页头部分，正文阅读距离保持不变。
+        alignmentRevision += 1
+    }
+
+    private func publishHeader() {
+        headerOffset = state.headerOffset
+        pinned = state.collapseLimit > 0 && headerOffset >= state.collapseLimit - 1
+        let nextCompact = headerOffset > 150
+        if compact != nextCompact {
+            withAnimation(Motion.micro) { compact = nextCompact }
+        }
+    }
+}
+
+private struct SpaceMovingHeader<Content: View>: View {
+    let scroll: SpaceScrollCoordinator
+    let contentOffset: CGFloat
     @ViewBuilder var content: Content
-    @State private var position = ScrollPosition(edge: .top)
-    @State private var deep = false
-    @State private var compact = false
-    @State private var hasReadingPosition = false
 
     var body: some View {
-        ScrollView { content }
-            .scrollPosition($position)
-            .onScrollGeometryChange(for: Int.self) { geometry in
-                let y = geometry.contentOffset.y + geometry.contentInsets.top
-                return (pinOffset > 0 && y >= pinOffset - 1 ? 1 : 0) + (y > 150 ? 2 : 0)
-            } action: { _, flags in
-                deep = flags & 1 != 0
-                compact = flags & 2 != 0
-                if active { report(deep, compact) }
+        content
+            // 抵消本页的正文阅读距离，让顶部始终使用共享的收起距离。
+            // 留在原生 ScrollView 内，资料区仍可直接拖动和下拉刷新。
+            .offset(y: contentOffset + scroll.pullDown - scroll.headerOffset)
+            .animation(nil, value: contentOffset)
+            .animation(nil, value: scroll.headerOffset)
+            .animation(nil, value: scroll.pullDown)
+    }
+}
+
+/// 各板块常驻；原生滚动偏移 = 共享页头收起距离 + 本板块正文阅读距离。
+private struct SpacePageScroll<Header: View, Content: View>: View {
+    let page: SpaceModel.Tab
+    let scroll: SpaceScrollCoordinator
+    @ViewBuilder var header: Header
+    @ViewBuilder var content: Content
+    @State private var position = ScrollPosition(edge: .top)
+    @State private var phase: ScrollPhase = .idle
+    @State private var lastOffset: CGFloat = 0
+    @State private var visualOffset: CGFloat = 0
+
+    private struct Metrics: Equatable {
+        let visual: CGFloat
+        let reading: CGFloat
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                SpaceMovingHeader(scroll: scroll, contentOffset: visualOffset) { header }
+                    .zIndex(1)
+                content
             }
-            .onScrollPhaseChange { _, phase, context in
-                guard active, phase == .idle else { return }
-                let y = context.geometry.contentOffset.y + context.geometry.contentInsets.top
-                hasReadingPosition = y > pinOffset + 1
-                restingHeaderOffset = min(max(0, y), pinOffset)
+        }
+        .scrollPosition($position)
+        .onScrollGeometryChange(for: Metrics.self) { metrics($0) } action: { _, value in
+            recordOffset(value)
+        }
+        .onScrollPhaseChange { _, next, context in
+            let wasUserScrolling = phase == .interacting || phase == .decelerating || phase == .tracking
+            // 开始拖动时计入首段距离；结束时计入可能晚于 phase 通知的最后一段。
+            if next == .interacting { phase = next }
+            recordOffset(metrics(context.geometry))
+            phase = next
+            if next == .idle, wasUserScrolling { scroll.settled(page) }
+        }
+        .onChange(of: scroll.alignmentRevision, initial: true) { _, _ in
+            let target = scroll.offset(for: page)
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                // 程序对齐不能当作用户滚动再次写回共享页头。
+                phase = .idle
+                lastOffset = target
+                visualOffset = target
+                position.scrollTo(y: target)
             }
-            .onChange(of: restingHeaderOffset) { _, offset in
-                // 对齐邻页头图。已经读到深处的列表保留自己的位置。
-                if !active, !hasReadingPosition { position.scrollTo(y: offset) }
-            }
-            .onChange(of: active) { _, visible in
-                if visible { report(deep, compact) }
-            }
+        }
+    }
+
+    private func recordOffset(_ value: Metrics) {
+        let old = lastOffset
+        lastOffset = value.reading
+        visualOffset = value.visual
+        guard phase == .interacting || phase == .decelerating else { return }
+        scroll.moved(page, from: old, to: value.reading)
+    }
+
+    private func metrics(_ geometry: ScrollGeometry) -> Metrics {
+        let y = geometry.contentOffset.y + geometry.contentInsets.top
+        let bottom = max(0, geometry.contentSize.height + geometry.contentInsets.top
+            + geometry.contentInsets.bottom - geometry.containerSize.height)
+        // 保留顶部下拉以展示回弹，底部回弹不计入阅读距离。
+        return Metrics(visual: y, reading: min(y, bottom))
     }
 }
 
@@ -655,6 +761,7 @@ private struct SpacePageScroll<Content: View>: View {
 
 private struct SpaceBanner: View {
     let url: String?
+    let scroll: SpaceScrollCoordinator
     @Environment(\.accent) private var accent
 
     var body: some View {
@@ -671,13 +778,9 @@ private struct SpaceBanner: View {
         }
         .frame(height: 200)
         .frame(maxWidth: .infinity)
-        // 只做渲染变换，不触发布局，滚动时开销很小
-        .visualEffect { content, proxy in
-            let minY = proxy.frame(in: .scrollView).minY
-            return content
-                .scaleEffect(minY > 0 ? 1 + minY / 200 : 1, anchor: .bottom)
-                .offset(y: minY < 0 ? -minY * 0.4 : 0)
-        }
+        // 视差使用共享页头距离，不随某个板块的正文阅读深度变化。
+        .scaleEffect(1 + scroll.pullDown / 200, anchor: .bottom)
+        .offset(y: scroll.headerOffset * 0.4)
         .clipped()
     }
 }

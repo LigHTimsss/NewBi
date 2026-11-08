@@ -7,19 +7,20 @@ final class PlayQueue {
     static let shared = PlayQueue()
 
     private(set) var title = ""
-    private(set) var cards: [VideoCard] = []
+    private var loadedCards: [VideoCard] = []
+    var cards: [VideoCard] { loadedCards.filter { !OwnedContentDeletion.shared.videos.contains($0.id) } }
     /// start() 之后、下一次打开视频之前为 true：舞台据此判断这次打开是不是从队列入口进来的
     @ObservationIgnored private var armed = false
 
     func start(_ cards: [VideoCard], title: String) {
-        self.cards = cards
+        self.loadedCards = cards
         self.title = title
         armed = true
     }
 
     func clear() {
         armed = false
-        if !cards.isEmpty { cards = [] }
+        if !loadedCards.isEmpty { loadedCards = [] }
     }
 
     /// 舞台每次打开视频时调用：不是刚从队列入口进来的（普通卡片、链接）就结束之前的连播，

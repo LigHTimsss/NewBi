@@ -12,7 +12,8 @@ final class DynamicModel {
     var filter: Filter = .all {
         didSet { if filter != oldValue { load(reset: true) } }
     }
-    private(set) var items: [DynamicItem] = []
+    private var loadedItems: [DynamicItem] = []
+    var items: [DynamicItem] { loadedItems.filter { !OwnedContentDeletion.shared.contains($0) } }
     private(set) var ups: [DynamicUp] = []
     private(set) var isLoading = false
     private(set) var hasMore = true
@@ -41,7 +42,7 @@ final class DynamicModel {
         epoch += 1
         loadTask?.cancel()
         loadTask = nil
-        items = []
+        loadedItems = []
         ups = []
         likeOverrides = [:]
         offset = ""
@@ -74,7 +75,7 @@ final class DynamicModel {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard hostMid != nil, trimmed != keyword else { return }
         keyword = trimmed
-        items = []
+        loadedItems = []
         load(reset: true)
     }
 
@@ -104,9 +105,9 @@ final class DynamicModel {
                 }
                 let feed = try await BiliClient.shared.get(endpoint, as: DynamicFeed.self)
                 guard !Task.isCancelled, epoch == self.epoch else { return }
-                let known = reset ? [] : Set(items.map(\.id))
+                let known = reset ? [] : Set(loadedItems.map(\.id))
                 let fresh = (feed.items ?? []).filter { !known.contains($0.id) }
-                items = reset ? fresh : items + fresh
+                loadedItems = reset ? fresh : loadedItems + fresh
                 // 整页重新拉到了：点赞状态以服务器为准
                 if reset { likeOverrides = [:] }
                 self.offset = feed.offset ?? ""
@@ -280,11 +281,11 @@ struct DynamicView: View {
                 ForEach(model.ups) { up in
                     NavigationLink(value: Route.space(mid: up.mid)) {
                         VStack(spacing: 6) {
-                            RemoteImage(url: up.face, size: CGSize(width: 52, height: 52))
-                                .frame(width: 52, height: 52)
-                                .clipShape(.circle)
+                            // 在直播的人换成粉色直播圈（点头像进直播间），否则有更新时是主题色光圈
+                            let isLive = LiveStatusCenter.shared.room(for: up.mid) != nil
+                            LiveAvatar(mid: up.mid, url: up.face, size: 52)
                                 .padding(2.5)
-                                .overlay { if up.hasUpdate == true { UpdateRing() } }
+                                .overlay { if up.hasUpdate == true && !isLive { UpdateRing() } }
                             Text(up.uname)
                                 .font(.system(size: 11))
                                 .foregroundStyle(.primary)
@@ -381,6 +382,9 @@ struct DynamicCard: View {
     var onComment: () -> Void
     var onImage: ([String], Int) -> Void
     @State private var expanded = false
+    @State private var confirmDelete = false
+    @State private var confirmVideoDelete = false
+    @Environment(SessionStore.self) private var session
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
 
@@ -409,6 +413,24 @@ struct DynamicCard: View {
         }
         .padding(14)
         .background(Theme.card, in: .rect(cornerRadius: 22))
+        .alert("删除这条动态？", isPresented: $confirmDelete) {
+            Button("删除", role: .destructive) {
+                Task {
+                    do {
+                        try await OwnedContentDeletion.shared.delete(item, session: session)
+                        ToastCenter.shared.show("动态已删除")
+                    } catch { ToastCenter.shared.show(OwnedContentDeletion.failureMessage(error)) }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: { Text("删除后无法恢复。") }
+        .modifier(VideoDeletionPresentation(card: videoCard, confirmation: $confirmVideoDelete))
+        .onChange(of: session.mid) { _, _ in confirmDelete = false; confirmVideoDelete = false }
+    }
+
+    private var videoCard: VideoCard {
+        item.modules.dynamic?.video(author: item.modules.author)
+            ?? VideoCard(id: 0, bvid: "", cid: nil, title: "", pic: "", duration: 0, owner: nil, stat: nil)
     }
 
     @ViewBuilder
@@ -417,9 +439,7 @@ struct DynamicCard: View {
             HStack(spacing: 10) {
                 NavigationLink(value: Route.space(mid: author.mid)) {
                     HStack(spacing: 10) {
-                        RemoteImage(url: author.face, size: CGSize(width: 40, height: 40))
-                            .frame(width: 40, height: 40)
-                            .clipShape(.circle)
+                        LiveAvatar(mid: author.mid, url: author.face, size: 40)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(author.name)
                                 .font(.system(size: 15, weight: .semibold))
@@ -435,6 +455,20 @@ struct DynamicCard: View {
                 }
                 .buttonStyle(PressableStyle())
                 Spacer(minLength: 0)
+                if OwnedContentDeletion.owns(author.mid, session: session) {
+                    Menu {
+                        if item.type == "DYNAMIC_TYPE_AV" {
+                            Button("删除视频稿件", systemImage: "trash", role: .destructive) { confirmVideoDelete = true }
+                                .disabled(videoCard.id <= 0)
+                        } else {
+                            Button("删除动态", systemImage: "trash", role: .destructive) { confirmDelete = true }
+                                .disabled(OwnedContentDeletion.shared.pendingDynamics.contains(item.id))
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis").frame(width: 32, height: 32).contentShape(.rect)
+                    }
+                    .accessibilityLabel("动态更多操作")
+                }
                 if let pin = item.modules.pinLabel {
                     Label(pin, systemImage: "pin.fill")
                         .labelStyle(CompactLabelStyle())

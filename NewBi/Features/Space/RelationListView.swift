@@ -175,9 +175,7 @@ private struct RelationRow: View {
         HStack(spacing: 12) {
             NavigationLink(value: Route.space(mid: user.mid)) {
                 HStack(spacing: 12) {
-                    RemoteImage(url: user.face, size: CGSize(width: 46, height: 46))
-                        .frame(width: 46, height: 46)
-                        .clipShape(.circle)
+                    LiveAvatar(mid: user.mid, url: user.face, size: 46)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(user.uname)
                             .font(.system(size: 15, weight: .semibold))

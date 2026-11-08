@@ -14,8 +14,14 @@ final class CommentModel {
     /// 评论区类型：1 视频 · 11 图文动态 · 17 文字 / 转发动态
     let type: Int
     private(set) var sort: Sort = .hot
-    private(set) var top: [Reply] = []
-    private(set) var replies: [Reply] = []
+    private var loadedTop: [Reply] = []
+    private var loadedReplies: [Reply] = []
+    var top: [Reply] { loadedTop.filter { !isDeleted($0) } }
+    var replies: [Reply] { loadedReplies.filter { !isDeleted($0) } }
+
+    func isDeleted(_ reply: Reply) -> Bool {
+        OwnedContentDeletion.shared.contains(reply, oid: oid, type: type)
+    }
     private(set) var total: Int?
     private(set) var isLoading = false
     private(set) var isEnd = false
@@ -66,11 +72,11 @@ final class CommentModel {
                 let page = try await BiliClient.shared.get(.replies(oid: oid, type: type, mode: mode, offset: offset), as: ReplyPage.self)
                 guard !Task.isCancelled else { return }
                 if reset {
-                    top = page.topReplies ?? []
-                    replies = []
+                    loadedTop = page.topReplies ?? []
+                    loadedReplies = []
                 }
-                let known = Set(top.map(\.id) + replies.map(\.id))
-                replies += (page.replies ?? []).filter { !known.contains($0.id) }
+                let known = Set(loadedTop.map(\.id) + loadedReplies.map(\.id))
+                loadedReplies += (page.replies ?? []).filter { !known.contains($0.id) }
                 total = page.cursor.allCount ?? total
                 self.offset = page.cursor.paginationReply?.nextOffset ?? ""
                 isEnd = page.cursor.isEnd || self.offset.isEmpty
@@ -119,6 +125,8 @@ final class CommentModel {
     @discardableResult
     func send(_ text: String, root: Reply? = nil, parent: Reply? = nil) async throws -> Reply? {
         guard let csrf = BiliClient.csrfToken else { throw BiliError.api(code: -101, message: "登录后才能评论") }
+        if let root, isDeleted(root) { throw BiliError.api(code: -404, message: "该评论已删除") }
+        if let parent, isDeleted(parent) { throw BiliError.api(code: -404, message: "该回复已删除") }
         var form = ["oid": "\(oid)", "type": "\(type)", "message": text, "plat": "1", "csrf": csrf]
         if let root {
             form["root"] = "\(root.id)"
@@ -126,7 +134,7 @@ final class CommentModel {
         }
         let result = try await BiliClient.shared.post(.replyAdd, form: form, as: ReplyAddResult.self)
         if root == nil, let reply = result.reply {
-            replies.insert(reply, at: 0)
+            loadedReplies.insert(reply, at: 0)
             total = (total ?? 0) + 1
         }
         return result.reply
@@ -140,13 +148,16 @@ final class ReplyThreadModel {
     let oid: Int
     let type: Int
     let root: Reply
-    private(set) var replies: [Reply] = []
+    private var loadedReplies: [Reply] = []
+    var replies: [Reply] { loadedReplies.filter { !OwnedContentDeletion.shared.contains($0, oid: oid, type: type) } }
     private(set) var total: Int?
     private(set) var isLoading = false
     private(set) var error: String?
     @ObservationIgnored private var page = 1
+    @ObservationIgnored private var generation = 0
 
-    var isEnd: Bool { total.map { replies.count >= $0 } ?? false }
+    var isEnd: Bool { total.map { loadedReplies.count >= $0 } ?? false }
+    var visibleTotal: Int { max(0, (total ?? root.rcount) - (loadedReplies.count - replies.count)) }
 
     init(oid: Int, type: Int = 1, root: Reply) {
         self.oid = oid
@@ -154,25 +165,37 @@ final class ReplyThreadModel {
         self.root = root
     }
 
+    func reload() async {
+        generation += 1
+        loadedReplies = []
+        total = nil
+        page = 1
+        isLoading = false
+        await loadMore()
+    }
+
     func loadMore() async {
         guard !isLoading, !isEnd else { return }
+        let generation = generation
         isLoading = true
-        defer { isLoading = false }
+        defer { if generation == self.generation { isLoading = false } }
         do {
             let result = try await BiliClient.shared.get(.subReplies(oid: oid, type: type, root: root.id, page: page), as: SubReplyPage.self)
-            let known = Set(replies.map(\.id))
+            guard !Task.isCancelled, generation == self.generation else { return }
+            let known = Set(loadedReplies.map(\.id))
             let fresh = (result.replies ?? []).filter { !known.contains($0.id) }
-            replies += fresh
-            total = fresh.isEmpty ? replies.count : result.page.count // 空页视为到底
+            loadedReplies += fresh
+            total = fresh.isEmpty ? loadedReplies.count : result.page.count // 空页视为到底
             page += 1
             error = nil
         } catch {
+            guard !Task.isCancelled, generation == self.generation else { return }
             self.error = error.localizedDescription
         }
     }
 
     func append(_ reply: Reply) {
-        replies.append(reply)
+        loadedReplies.append(reply)
         total = (total ?? 0) + 1
     }
 }

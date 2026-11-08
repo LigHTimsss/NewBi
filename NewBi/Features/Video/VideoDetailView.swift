@@ -5,6 +5,13 @@ import SwiftUI
 final class VideoDetailModel {
     let card: VideoCard
     let player = PlayerController()
+    /// 删除入口必须使用完整详情里的作者和 aid；仅有 BV 号的卡片不能猜测归属。
+    var deletionCard: VideoCard {
+        guard let detail else { return card }
+        return VideoCard(id: detail.aid, bvid: detail.bvid, cid: detail.cid,
+            title: detail.title, pic: detail.pic, duration: detail.duration,
+            owner: detail.owner, stat: detail.stat)
+    }
     /// 卡片 id 即 aid，评论不必等详情返回；只有 BV 号时（评论里的链接）等详情拿到 aid 再建
     private(set) var comments: CommentModel
     private(set) var detail: VideoDetail?
@@ -1013,9 +1020,7 @@ private struct IntroSection: View {
             // 点头像或名字进入 UP 主空间
             RouteLink(route: Route.space(mid: owner.mid)) {
                 HStack(spacing: 10) {
-                    RemoteImage(url: owner.face, size: CGSize(width: 40, height: 40))
-                        .frame(width: 40, height: 40)
-                        .clipShape(.circle)
+                    LiveAvatar(mid: owner.mid, url: owner.face, size: 40)
                     Text(owner.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                 }
                 .contentShape(.rect)
