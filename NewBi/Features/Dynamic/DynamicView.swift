@@ -270,7 +270,7 @@ struct DynamicView: View {
             }
             .padding(.bottom, 16)
         }
-        .contentMargins(.bottom, 96, for: .scrollContent)
+        .contentMargins(.bottom, 16, for: .scrollContent)
         .refreshable { await model.refresh() }
     }
 

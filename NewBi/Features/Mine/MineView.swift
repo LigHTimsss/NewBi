@@ -22,11 +22,11 @@ struct MineView: View {
         ViewThatFits(in: .vertical) {
             content
                 .padding(.top, 56)
-                .padding(.bottom, 96)
+                .padding(.bottom, 16)
                 .frame(maxHeight: .infinity, alignment: .top)
             ScrollView { content }
                 .contentMargins(.top, 56, for: .scrollContent)
-                .contentMargins(.bottom, 96, for: .scrollContent)
+                .contentMargins(.bottom, 16, for: .scrollContent)
         }
         .overlay(alignment: .topTrailing) { toolGroup.padding(.trailing, 16) }
         .sheet(isPresented: $showLogin) { LoginView() }

@@ -31,11 +31,11 @@ struct GlowLine: View {
     }
 }
 
-// MARK: - 液态选择器：底部 Tab 栏、各处分段控件共用
+// MARK: - 液态选择器：页面内分段控件（首页底栏使用系统 TabView）
 //
 // 整条只有一个指示器（胶囊 + 发光线是同一个视图），位置由选中项直接算出来，
 // 切换时胶囊和线一起走同一条弹簧曲线，不会一前一后。
-// 按住后指示器浮起成玻璃透镜、跟手滑动，经过的项高亮并轻触反馈，松手即切到手指下那一项（系统 Tab 栏同款）；
+// 按住后指示器浮起成玻璃透镜、跟手滑动，经过的项高亮并轻触反馈，松手即切到手指下那一项；
 // 轻点也走同一个手势：透镜跳到手指处再落回该项。
 
 struct LiquidSelector<Item: View>: View {
@@ -44,8 +44,6 @@ struct LiquidSelector<Item: View>: View {
     var height: CGFloat
     /// 放在可滚动页面里时为 true：不独占触摸（页面照常上下滚动），竖向滑动不会误切
     var allowsScrolling = false
-    /// 底栏按透镜实际覆盖范围着色；普通分段控件仍按整项高亮。
-    var continuousHighlight = false
     var onSelect: (Int) -> Void
     @ViewBuilder var item: (_ index: Int, _ highlighted: Bool) -> Item
 
@@ -80,30 +78,14 @@ struct LiquidSelector<Item: View>: View {
 
                 HStack(spacing: 0) {
                     ForEach(0..<count, id: \.self) { index in
-                        item(index, continuousHighlight ? false : index == hover)
+                        item(index, index == hover)
                             .frame(width: slot, height: geo.size.height)
                             .contentShape(.rect)
-                            .animation(continuousHighlight ? nil : Motion.micro, value: hover)
+                            .animation(Motion.micro, value: hover)
                             .accessibilityElement(children: .combine)
                             .accessibilityAddTraits(index == selected ? [.isButton, .isSelected] : .isButton)
                             .accessibilityAction { onSelect(index) }
                     }
-                }
-
-                if continuousHighlight {
-                    // 同样的图标与文字叠一层强调色；只显露透镜覆盖的部分。
-                    // 遮罩与玻璃共用位置、缩放和弹簧，拖动、点击、松手回弹都同步。
-                    HStack(spacing: 0) {
-                        ForEach(0..<count, id: \.self) { index in
-                            item(index, true)
-                                .frame(width: slot, height: geo.size.height)
-                        }
-                    }
-                    .mask(alignment: .topLeading) {
-                        Capsule().modifier(lens)
-                    }
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
                 }
             }
             .contentShape(.rect)
@@ -141,7 +123,7 @@ struct LiquidSelector<Item: View>: View {
     }
 }
 
-/// 玻璃和着色遮罩使用同一套几何与动画参数，避免颜色领先或落后于透镜。
+/// 页面内分段控件的选择指示器位置、缩放和动画。
 private struct SelectorLensMotion: ViewModifier {
     let slot: CGFloat
     let height: CGFloat
@@ -159,7 +141,7 @@ private struct SelectorLensMotion: ViewModifier {
     }
 }
 
-/// 独占（Tab 栏）还是与页面滚动并存（分段控件）
+/// 独占触摸，或与页面滚动并存。
 private struct SelectorGesture<G: Gesture>: ViewModifier {
     let allowsScrolling: Bool
     let gesture: G
@@ -185,88 +167,6 @@ private struct SelectorIndicator: View {
             .glassEffect(lifted ? .clear.interactive() : .identity, in: .capsule)
             .shadow(color: .black.opacity(lifted ? 0.18 : 0), radius: lifted ? 10 : 0, y: lifted ? 4 : 0)
             .allowsHitTesting(false)
-    }
-}
-
-// MARK: - 底部主导航：玻璃胶囊（首页/动态/我的）+ 独立圆形搜索按钮
-
-enum AppTab: Int, CaseIterable, Identifiable {
-    case home, dynamic, mine
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .home: "首页"
-        case .dynamic: "动态"
-        case .mine: "我的"
-        }
-    }
-
-    func icon(selected: Bool) -> String {
-        switch self {
-        case .home: selected ? "house.fill" : "house"
-        case .dynamic: selected ? "safari.fill" : "safari"
-        case .mine: selected ? "person.fill" : "person"
-        }
-    }
-}
-
-struct GlassTabBar: View {
-    var selection: AppTab
-    /// 搜索页从按钮放大展开（zoom 转场）
-    /// 显示红点的 Tab（动态有更新）
-    var badges: Set<AppTab> = []
-    var onSelect: (AppTab) -> Void
-    var onSearch: () -> Void
-    @Environment(\.accent) private var accent
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        GlassEffectContainer(spacing: 10) {
-            HStack(spacing: 10) {
-                // 按住可左右滑动切换；高亮跟着手指走，松手才真正切页
-                LiquidSelector(count: AppTab.allCases.count, selected: selection.rawValue, height: 52, continuousHighlight: true) { index in
-                    if let tab = AppTab(rawValue: index) { onSelect(tab) }
-                } item: { index, highlighted in
-                    let tab = AppTab(rawValue: index) ?? .home
-                    VStack(spacing: 2) {
-                        // 两层轮廓一致，滑动时只改变覆盖处的颜色；松手选中后再切换填充图标。
-                        Image(systemName: tab.icon(selected: tab == selection))
-                            .font(.system(size: 20))
-                            .frame(height: 24)
-                            .contentTransition(.symbolEffect(.replace))
-                            .overlay(alignment: .topTrailing) {
-                                if badges.contains(tab) {
-                                    Circle()
-                                        .fill(accent)
-                                        .frame(width: 8, height: 8)
-                                        .offset(x: 5, y: -1)
-                                        .transition(.scale.combined(with: .opacity))
-                                }
-                            }
-                            .animation(Motion.component, value: badges)
-                        Text(tab.title)
-                            .font(.system(size: 10, weight: tab == selection ? .semibold : .medium))
-                    }
-                    .foregroundStyle(highlighted ? accent.accentText(scheme) : .primary)
-                    .accessibilityLabel(tab.title)
-                    .accessibilityValue(badges.contains(tab) ? "有更新" : "")
-                }
-                .padding(5)
-                .glassEffect(.regular.interactive(), in: .capsule)
-
-                Button(action: onSearch) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 20, weight: .semibold))
-                        .frame(width: 62, height: 62)
-                        .contentShape(.circle)
-                }
-                .buttonStyle(PressableStyle())
-                .glassEffect(.regular.interactive(), in: .circle)
-                .accessibilityLabel("搜索")
-            }
-        }
-        .padding(.horizontal, 18)
     }
 }
 

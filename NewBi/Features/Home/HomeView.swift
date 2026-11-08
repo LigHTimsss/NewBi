@@ -130,7 +130,7 @@ private struct FeedPage: View {
             .padding(.horizontal, 16)
         }
         .contentMargins(.top, 56, for: .scrollContent)    // 顶部玻璃频道条
-        .contentMargins(.bottom, 96, for: .scrollContent) // 底部玻璃导航
+        .contentMargins(.bottom, 16, for: .scrollContent) // 原生 TabView 已提供底栏安全区
         // 新一页到了就把封面下载、解码进内存：滑到时直接出图，不再一格格淡入
         .onChange(of: model.items.count, initial: true) { old, new in
             // 第一个是大横幅（尺寸不同，自己加载）；加载更多时只取新的一页，刷新后从头取

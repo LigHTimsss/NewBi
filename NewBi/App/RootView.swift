@@ -26,16 +26,17 @@ enum Route: Hashable {
     case chat(ChatPeer)
 }
 
-/// 根视图：三个 Tab 横向平移切换（Flow 画板），底部为自定义玻璃导航。
+/// 根视图：系统 TabView 提供原生 Liquid Glass 底栏。
 /// 单一 NavigationStack 包住整个 Tab 容器，进入详情页时导航栏自然被覆盖。
 struct RootView: View {
     @State private var path = NavigationPath()
+    @State private var tab: AppTab = .home
     @Environment(SessionStore.self) private var session
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack(path: $path) {
-            RootTabs(path: $path)
+            RootTabs(path: $path, tab: $tab)
             .navigationDestination(for: Route.self) { route in
                 Group {
                     switch route {
@@ -77,8 +78,8 @@ struct RootView: View {
         // 视频页在导航栈外：一层全屏舞台。卡片封面放大成视频页，返回时收成胶囊或缩回卡片，全程同一个画面
         .accessibilityHidden(VideoStage.shared.coversApp)
         .overlay {
-            StageView(capsuleLift: path.isEmpty ? 72 : 8)
-                .animation(VideoStage.shared.showsMini ? Motion.component : nil, value: path.isEmpty)
+            StageView(capsuleLift: path.isEmpty && tab != .search ? 72 : 8)
+                .animation(VideoStage.shared.showsMini ? Motion.component : nil, value: path.isEmpty && tab != .search)
                 .environment(\.openRoute, { route in
                     VideoStage.shared.makeRoom()
                     path.append(route)
@@ -129,72 +130,65 @@ struct RootView: View {
 
 }
 
-/// 根标签页单独持有界面状态。导航路径变化时，首页列表和玻璃底栏拥有独立的更新边界。
+enum AppTab: Hashable {
+    case home, dynamic, mine, search
+}
+
+/// 固定身份的系统标签页保留各自滚动和加载状态；玻璃、选中透镜和图标由系统绘制。
 private struct RootTabs: View {
     @Binding var path: NavigationPath
-    @State private var tab: AppTab = .home
-    /// 递增即让动态页刷新：有红点时切过去、或在动态页再点一次「动态」
+    @Binding var tab: AppTab
+    @State private var lastContentTab: AppTab = .home
     @State private var dynamicRefresh = 0
-    /// 正在滑出的页（可能连点了好几次），这一串切换的动画全部结束后清空
-    @State private var leaving: Set<AppTab> = []
-    @State private var switchID = 0
 
     var body: some View {
-            GeometryReader { geo in
-                ZStack {
-                    ForEach(AppTab.allCases) { item in
-                        page(item)
-                            // 当前页和正在滑出的页照常；其余页停掉呼吸光轨（停的时候都在屏幕外，看不出来）
-                            .environment(\.pageActive, item == tab || leaving.contains(item))
-                            // 卡片位置按页面记：切页平移时不必每帧重算每张卡片
-                            .coverSpace()
-                            .miniPlayerInset(66)
-                            .frame(width: geo.size.width)
-                            .offset(x: CGFloat(item.rawValue - tab.rawValue) * geo.size.width)
-                            .allowsHitTesting(item == tab)
-                            .accessibilityHidden(item != tab)
-                    }
-                }
+        TabView(selection: Binding(get: { tab }, set: select)) {
+            Tab("首页", systemImage: "house", value: AppTab.home) {
+                HomeView(onAvatar: { select(.mine) }, onMessages: { path.append(Route.messages) })
+                    .modifier(RootTabPage(active: tab == .home && path.isEmpty))
             }
-            .background(Theme.background)
-            // 重新打开被隐藏导航栏关掉的侧滑返回
-            .background { BackGestureEnabler().frame(width: 0, height: 0) }
-            .overlay(alignment: .bottom) {
-                GlassTabBar(
-                    selection: tab,
-                    badges: DynamicBadge.shared.hasNew && tab != .dynamic ? [.dynamic] : [],
-                    onSelect: select
-                ) {
-                    path.append(Route.search)
-                }
+            Tab("动态", systemImage: "safari", value: AppTab.dynamic) {
+                DynamicView(refreshToken: dynamicRefresh)
+                    .modifier(RootTabPage(active: tab == .dynamic && path.isEmpty))
             }
-            .ignoresSafeArea(.keyboard)
-            .toolbar(.hidden, for: .navigationBar)
-            .sensoryFeedback(.selection, trigger: tab)
-    }
-
-    @ViewBuilder
-    private func page(_ item: AppTab) -> some View {
-        switch item {
-        case .home: HomeView(onAvatar: { select(.mine) }, onMessages: { path.append(Route.messages) })
-        case .dynamic: DynamicView(refreshToken: dynamicRefresh)
-        case .mine: MineView()
+            .badge(DynamicBadge.shared.hasNew && tab != .dynamic ? Text("新") : nil)
+            Tab("我的", systemImage: "person", value: AppTab.mine) {
+                MineView()
+                    .modifier(RootTabPage(active: tab == .mine && path.isEmpty))
+            }
+            Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search, role: .search) {
+                // 搜索是真正的系统标签，不用空白占位页再跳转，避免切换时闪白。
+                SearchView(isActive: tab == .search && path.isEmpty, onCancel: { select(lastContentTab) })
+                    .coverSpace()
+                    .miniPlayerInset()
+                    .toolbar(.hidden, for: .tabBar)
+            }
         }
+        .tabBarMinimizeBehavior(.never)
+        .background(Theme.background)
+        .background { BackGestureEnabler().frame(width: 0, height: 0) }
+        .toolbar(.hidden, for: .navigationBar)
     }
 
     private func select(_ item: AppTab) {
         if item == .dynamic, tab == .dynamic || DynamicBadge.shared.hasNew {
             dynamicRefresh += 1
         }
-        guard item != tab else { return }
-        leaving.insert(tab)
-        switchID += 1
-        let id = switchID
-        withAnimation(Motion.tab, completionCriteria: .logicallyComplete) {
-            tab = item
-        } completion: {
-            // 旧的完成回调不能清掉新一次切换还在滑出的页
-            if switchID == id { leaving = [] }
-        }
+        if item != .search { lastContentTab = item }
+        // 不给 TabView 外挂弹簧或整页平移动画，保留原生选择交互。
+        tab = item
+    }
+}
+
+private struct RootTabPage: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.pageActive, active)
+            .coverSpace()
+            // TabView 已提供底栏安全区，这里只额外为迷你播放器留空间。
+            .miniPlayerInset()
+            .toolbar(.visible, for: .tabBar)
     }
 }
