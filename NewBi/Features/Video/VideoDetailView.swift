@@ -308,6 +308,8 @@ struct VideoDetailView: View {
     @State private var tab = 0
     /// 简介 → 评论的横滑进度 0…1，Tab 下划线跟手
     @State private var pageProgress: CGFloat = 0
+    /// 全屏期间保持下方分页的正常布局尺寸，避免零高度和转屏重排破坏阅读位置。
+    @State private var detailViewport = CGSize.zero
     private var isFullscreen: Bool { VideoStage.shared.isFullscreen }
     @State private var lastDeviceOrientation: UIDeviceOrientation = .unknown
     @State private var locked = false
@@ -325,6 +327,9 @@ struct VideoDetailView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let compactSize = CGSize(width: geo.size.width, height: max(0, geo.size.height - geo.size.width * 9 / 16))
+            let preserveLayout = isFullscreen || geo.size.width > geo.size.height
+            let detailSize = preserveLayout && detailViewport.width > 0 ? detailViewport : compactSize
             VStack(spacing: 0) {
                 player
                     .frame(height: isFullscreen ? geo.size.height : geo.size.width * 9 / 16)
@@ -338,14 +343,19 @@ struct VideoDetailView: View {
                     ) { index in
                         withAnimation(Motion.component) { tab = index }
                     }
-                    DetailPager(model: model, tab: $tab, progress: $pageProgress)
+                    DetailPager(model: model, tab: $tab, progress: $pageProgress, suspended: preserveLayout)
                 }
-                .frame(height: isFullscreen ? 0 : nil)
+                .frame(width: detailSize.width, height: detailSize.height)
+                .frame(height: isFullscreen ? 0 : detailSize.height, alignment: .top)
                 .clipped()
                 .opacity(isFullscreen ? 0 : 1)
                 .allowsHitTesting(!isFullscreen)
                 .accessibilityHidden(isFullscreen)
             }
+        }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            guard !isFullscreen, size.width > 0, size.height > size.width else { return }
+            detailViewport = CGSize(width: size.width, height: max(0, size.height - size.width * 9 / 16))
         }
         .background(isFullscreen ? Color.black : Theme.background)
         .statusBarHidden(isFullscreen)
@@ -789,6 +799,7 @@ private struct DetailPager: View {
     let model: VideoDetailModel
     @Binding var tab: Int
     @Binding var progress: CGFloat
+    var suspended: Bool
     @State private var commentsMounted = false
 
     var body: some View {
@@ -812,10 +823,11 @@ private struct DetailPager: View {
         .scrollTargetBehavior(.paging)
         .scrollIndicators(.hidden)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .scrollPosition(id: Binding(get: { tab }, set: { if let value = $0 { tab = value } }))
+        .scrollPosition(id: Binding(get: { tab }, set: { if !suspended, let value = $0 { tab = value } }))
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.containerSize.width > 0 ? geo.contentOffset.x / geo.containerSize.width : 0
         } action: { _, value in
+            guard !suspended else { return }
             progress = min(max(value, 0), 1)
             if value > 0.01, !commentsMounted { commentsMounted = true }
         }
