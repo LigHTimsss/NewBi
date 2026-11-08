@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum Route: Hashable {
     case settings
@@ -215,15 +216,18 @@ private struct RootTabs: View {
         TabView(selection: Binding(get: { tab }, set: select)) {
             Tab("首页", systemImage: "house", value: AppTab.home) {
                 HomeView(onAvatar: { select(.mine) }, onMessages: { path.append(Route.messages) })
+                    .background(CompactDynamicBadgeStyle())
                     .modifier(RootTabPage(active: tab == .home && path.isEmpty))
             }
             Tab("动态", systemImage: "safari", value: AppTab.dynamic) {
                 DynamicView(refreshToken: dynamicRefresh)
+                    .background(CompactDynamicBadgeStyle())
                     .modifier(RootTabPage(active: tab == .dynamic && path.isEmpty))
             }
-            .badge(DynamicBadge.shared.hasNew && tab != .dynamic ? Text("") : nil)
+            .badge(DynamicBadge.shared.hasNew && tab != .dynamic ? Text("●") : nil)
             Tab("我的", systemImage: "person", value: AppTab.mine) {
                 MineView()
+                    .background(CompactDynamicBadgeStyle())
                     .modifier(RootTabPage(active: tab == .mine && path.isEmpty))
             }
             Tab("搜索", systemImage: "magnifyingglass", value: AppTab.search, role: searchTabRole) {
@@ -272,5 +276,48 @@ private struct RootTabPage: ViewModifier {
             // TabView 已提供底栏安全区，这里只额外为迷你播放器留空间。
             .miniPlayerInset()
             .toolbar(.visible, for: .tabBar)
+    }
+}
+
+/// 保留系统角标的位置与显隐，只将默认红底替换为小红点。
+private struct CompactDynamicBadgeStyle: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.applyBadgeStyle()
+    }
+
+    final class Controller: UIViewController {
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            applyBadgeStyle()
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            applyBadgeStyle()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            applyBadgeStyle()
+        }
+
+        private weak var styledItem: UITabBarItem?
+
+        func applyBadgeStyle() {
+            // RootTabs 固定顺序：首页、动态、我的、搜索。各页均安装，首次未打开动态也能生效。
+            guard let items = tabBarController?.tabBar.items, items.count > 1 else { return }
+            let item = items[1]
+            guard styledItem !== item else { return }
+            item.badgeColor = .clear
+            for state: UIControl.State in [.normal, .selected] {
+                item.setBadgeTextAttributes([
+                    .font: UIFont.systemFont(ofSize: 10),
+                    .foregroundColor: UIColor.systemRed
+                ], for: state)
+            }
+            styledItem = item
+        }
     }
 }
