@@ -158,6 +158,9 @@ struct CommentRow: View {
     var onReply: (Reply) -> Void
     var onOpenThread: (Reply) -> Void
     var onError: (String) -> Void
+    var onDeleted: (() -> Void)? = nil
+    @State private var confirmDelete = false
+    @Environment(SessionStore.self) private var session
     @State private var viewer: ImageViewerRequest?
     @Environment(\.accent) private var accent
     @Environment(\.colorScheme) private var scheme
@@ -257,12 +260,22 @@ struct CommentRow: View {
                     }
                     .buttonStyle(PressableStyle())
                     .accessibilityLabel("回复")
+                    if OwnedContentDeletion.owns(reply.member.midValue, session: session) {
+                        Menu {
+                            Button("删除评论", systemImage: "trash", role: .destructive) { confirmDelete = true }
+                                .disabled(OwnedContentDeletion.shared.pendingComments.contains(
+                                    .init(type: model.type, oid: model.oid, rpid: reply.id)))
+                        } label: {
+                            Image(systemName: "ellipsis").frame(minWidth: 32, minHeight: 32).contentShape(.rect)
+                        }
+                        .accessibilityLabel("评论更多操作")
+                    }
                 }
                 .font(.system(size: 13))
                 .animation(Motion.component, value: liked)
 
                 if showsPreview, reply.rcount > 0 || reply.replies?.isEmpty == false {
-                    threadPreview(reply.replies ?? [])
+                    threadPreview((reply.replies ?? []).filter { !model.isDeleted($0) })
                 }
             }
         }
@@ -271,6 +284,20 @@ struct CommentRow: View {
         .overlay(alignment: .bottom) {
             Theme.separator.frame(height: 0.5).padding(.leading, 64)
         }
+        .alert("删除这条评论？", isPresented: $confirmDelete) {
+            Button("删除", role: .destructive) {
+                Task {
+                    do {
+                        try await OwnedContentDeletion.shared.delete(reply, oid: model.oid, type: model.type, session: session)
+                        onDeleted?()
+                        ToastCenter.shared.show("评论已删除")
+                        await model.reload()
+                    } catch { onError(OwnedContentDeletion.failureMessage(error)) }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: { Text("删除后无法恢复；删除主评论会同时移除其下的回复。") }
+        .onChange(of: session.mid) { _, _ in confirmDelete = false }
     }
 
     @ViewBuilder
@@ -376,7 +403,7 @@ struct ReplyThreadView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     row(thread.root)
                     Theme.card.frame(height: 8)
-                    Text("相关回复共 \(thread.total ?? thread.root.rcount) 条")
+                    Text("相关回复共 \(thread.visibleTotal) 条")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.secondaryText)
                         .padding(.horizontal, 16)
@@ -420,6 +447,9 @@ struct ReplyThreadView: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .onChange(of: model.isDeleted(thread.root), initial: true) { _, deleted in
+            if deleted { dismiss() }
+        }
     }
 
     private func row(_ reply: Reply) -> some View {
@@ -433,7 +463,14 @@ struct ReplyThreadView: View {
                 focused = true
             },
             onOpenThread: { _ in },
-            onError: { toast = $0 }
+            onError: { toast = $0 },
+            onDeleted: {
+                if reply.id == thread.root.id { dismiss() }
+                else {
+                    if target?.id == reply.id { target = nil; focused = false }
+                    Task { await thread.reload() }
+                }
+            }
         )
     }
 

@@ -583,6 +583,7 @@ struct MorePanel: View {
                 addedToWatchLater ? "已加稍后看" : "稍后再看", on: addedToWatchLater, action: addToWatchLater
             )
             .disabled(aid <= 0)
+            DeleteVideoControl(card: model.deletionCard)
         }
     }
 

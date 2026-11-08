@@ -29,12 +29,21 @@ final class SpaceModel {
     @ObservationIgnored private var locationLoaded = false
     /// 投稿里搜索的关键词（空为不搜）
     private(set) var keyword = ""
-    private(set) var topVideo: VideoCard?
-    private(set) var masterpieces: [VideoCard] = []
+    private var loadedTopVideo: VideoCard?
+    var topVideo: VideoCard? {
+        loadedTopVideo.flatMap { OwnedContentDeletion.shared.videos.contains($0.id) ? nil : $0 }
+    }
+    private var loadedMasterpieces: [VideoCard] = []
+    var masterpieces: [VideoCard] { loadedMasterpieces.filter { !OwnedContentDeletion.shared.videos.contains($0.id) } }
     /// 主页「最近投稿」：首次按最新发布加载的前 6 个
-    private(set) var recent: [SpaceVideo] = []
-    private(set) var videos: [SpaceVideo] = []
-    private(set) var videoCount: Int?
+    private var loadedRecent: [SpaceVideo] = []
+    private var loadedVideos: [SpaceVideo] = []
+    private var loadedVideoCount: Int?
+    var recent: [SpaceVideo] { loadedRecent.filter { !OwnedContentDeletion.shared.videos.contains($0.id) } }
+    var videos: [SpaceVideo] { loadedVideos.filter { !OwnedContentDeletion.shared.videos.contains($0.id) } }
+    var videoCount: Int? {
+        loadedVideoCount.map { max(0, $0 - (loadedVideos.count - videos.count)) }
+    }
     private(set) var isLoadingVideos = false
     private(set) var videosError: String?
     private(set) var error: String?
@@ -42,7 +51,7 @@ final class SpaceModel {
         didSet { if order != oldValue { loadVideos(reset: true) } }
     }
 
-    var hasMoreVideos: Bool { videoCount.map { videos.count < $0 } ?? true }
+    var hasMoreVideos: Bool { loadedVideoCount.map { loadedVideos.count < $0 } ?? true }
     var followerCount: Int { (profile?.card.fans ?? 0) + relation.followerDelta }
 
     @ObservationIgnored private var page = 1
@@ -106,8 +115,8 @@ final class SpaceModel {
         } catch {
             self.error = error.localizedDescription
         }
-        topVideo = await top
-        masterpieces = (await master ?? []).filter { !$0.bvid.isEmpty && $0.bvid != topVideo?.bvid }
+        loadedTopVideo = await top
+        loadedMasterpieces = (await master ?? []).filter { !$0.bvid.isEmpty && $0.bvid != topVideo?.bvid }
         accInfo = await acc
     }
 
@@ -133,7 +142,7 @@ final class SpaceModel {
         if let acc = try? await BiliClient.shared.get(.spaceAccInfo(mid: mid), as: SpaceAccInfo.self) { accInfo = acc }
         switch tab {
         case .home, .videos:
-            if keyword.isEmpty { recent = [] }
+            if keyword.isEmpty { loadedRecent = [] }
             loadVideos(reset: true)
             await loadTask?.value
         case .dynamic:
@@ -154,8 +163,8 @@ final class SpaceModel {
         if reset {
             loadTask?.cancel()
             page = 1
-            videos = []
-            videoCount = nil
+            loadedVideos = []
+            loadedVideoCount = nil
             videosError = nil
             isLoadingVideos = false
         }
@@ -166,10 +175,10 @@ final class SpaceModel {
             do {
                 let result = try await BiliClient.shared.get(.spaceVideos(mid: mid, page: page, order: order.rawValue, keyword: keyword), as: SpaceArcSearch.self)
                 guard !Task.isCancelled else { return }
-                let known = Set(videos.map(\.id))
-                videos += (result.list.vlist ?? []).filter { !known.contains($0.id) }
-                videoCount = result.page.count
-                if order == .pubdate, keyword.isEmpty, recent.isEmpty { recent = Array(videos.prefix(6)) }
+                let known = Set(loadedVideos.map(\.id))
+                loadedVideos += (result.list.vlist ?? []).filter { !known.contains($0.id) }
+                loadedVideoCount = result.page.count
+                if order == .pubdate, keyword.isEmpty, recent.isEmpty { loadedRecent = Array(videos.prefix(6)) }
                 self.page = page + 1
                 videosError = nil
             } catch {

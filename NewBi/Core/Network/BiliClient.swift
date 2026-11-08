@@ -64,17 +64,18 @@ actor BiliClient {
     }
 
     /// 表单 POST，只看 code（点赞、关注等接口成功时不返回 data）
-    func post(_ endpoint: Endpoint, form: [String: String]) async throws {
-        let status = try decoder.decode(Status.self, from: await postData(endpoint, form: form))
+    func post(_ endpoint: Endpoint, form: [String: String], expectedMid: Int? = nil) async throws {
+        let status = try decoder.decode(Status.self, from: await postData(endpoint, form: form, expectedMid: expectedMid))
         guard status.code == 0 else { throw BiliError.api(code: status.code, message: status.message) }
     }
 
     /// JSON POST（动态点赞等新接口）
-    func postJSON<Body: Encodable & Sendable>(_ endpoint: Endpoint, body: Body) async throws {
+    func postJSON<Body: Encodable & Sendable>(_ endpoint: Endpoint, body: Body, expectedMid: Int? = nil) async throws {
         var request = URLRequest(url: try await url(for: endpoint))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
+        if let expectedMid { try pinAccount(expectedMid, to: &request) }
         let (data, response) = try await session.data(for: request)
         try Self.check(response)
         let status = try decoder.decode(Status.self, from: data)
@@ -86,15 +87,28 @@ actor BiliClient {
         let message: String
     }
 
-    private func postData(_ endpoint: Endpoint, form: [String: String], headers: [String: String] = [:]) async throws -> Data {
+    private func postData(_ endpoint: Endpoint, form: [String: String], headers: [String: String] = [:], expectedMid: Int? = nil) async throws -> Data {
         var request = URLRequest(url: try await url(for: endpoint))
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         request.httpBody = Data(form.map { "\($0.key.formEncoded)=\($0.value.formEncoded)" }.joined(separator: "&").utf8)
+        if let expectedMid { try pinAccount(expectedMid, to: &request) }
         let (data, response) = try await session.data(for: request)
         try Self.check(response)
         return data
+    }
+
+    /// 删除前绑定确认时的账号 Cookie 快照，避免等待 actor 时已切到另一账号。
+    private func pinAccount(_ mid: Int, to request: inout URLRequest) throws {
+        guard let url = request.url else { throw BiliError.badURL }
+        let cookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
+        guard cookies.first(where: { $0.name == "DedeUserID" })?.value == String(mid),
+              cookies.contains(where: { $0.name == "SESSDATA" && !$0.value.isEmpty }) else {
+            throw BiliError.api(code: -101, message: "登录账号已变化，请重新确认删除")
+        }
+        request.httpShouldHandleCookies = false
+        request.setValue(HTTPCookie.requestHeaderFields(with: cookies)["Cookie"], forHTTPHeaderField: "Cookie")
     }
 
     /// 写操作需要的 csrf（登录后 Cookie 中的 bili_jct）

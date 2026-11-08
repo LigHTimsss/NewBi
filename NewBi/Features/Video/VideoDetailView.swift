@@ -5,6 +5,13 @@ import SwiftUI
 final class VideoDetailModel {
     let card: VideoCard
     let player = PlayerController()
+    /// 删除入口必须使用完整详情里的作者和 aid；仅有 BV 号的卡片不能猜测归属。
+    var deletionCard: VideoCard {
+        guard let detail else { return card }
+        return VideoCard(id: detail.aid, bvid: detail.bvid, cid: detail.cid,
+            title: detail.title, pic: detail.pic, duration: detail.duration,
+            owner: detail.owner, stat: detail.stat)
+    }
     /// 卡片 id 即 aid，评论不必等详情返回；只有 BV 号时（评论里的链接）等详情拿到 aid 再建
     private(set) var comments: CommentModel
     private(set) var detail: VideoDetail?

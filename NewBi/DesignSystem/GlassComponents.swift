@@ -401,7 +401,7 @@ final class ToastCenter {
 extension View {
     /// 长按菜单「稍后再看」：首页、搜索、相关推荐、UP 主空间的视频卡片共用
     func watchLaterMenu(_ card: VideoCard) -> some View {
-        contextMenu {
+        modifier(OwnedVideoActions(card: card) {
             Button {
                 Task {
                     do {
@@ -421,7 +421,7 @@ extension View {
                     Label("分享", systemImage: "square.and.arrow.up")
                 }
             }
-        }
+        })
     }
 }
 

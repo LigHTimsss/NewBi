@@ -167,6 +167,14 @@ extension Endpoint {
         Endpoint(path: "/x/dynamic/feed/dyn/thumb", query: ["csrf": csrf])
     }
 
+    /// 删除本人动态（POST JSON，dyn_id_str；csrf 在 URL 查询参数中）。
+    static func dynamicDelete(csrf: String) -> Endpoint {
+        Endpoint(path: "/x/dynamic/feed/operate/remove", query: ["csrf": csrf, "platform": "web"])
+    }
+
+    /// 删除本人评论（POST 表单：oid / type / rpid / csrf）。
+    static let replyDelete = Endpoint(path: "/x/v2/reply/del")
+
     // MARK: 点赞 / 投币（需登录）
 
     /// 我和这个视频的关系：是否已赞、已投几枚币、是否已收藏
