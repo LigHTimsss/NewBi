@@ -6,6 +6,7 @@ import SwiftUI
 struct LiveFullscreenOverlay: View {
     let model: LiveRoomModel
     @Binding var locked: Bool
+    var safeAreaInsets = EdgeInsets()
     var onExit: () -> Void
     /// 点主播：退出全屏后进空间
     var onAnchor: (Int) -> Void
@@ -31,13 +32,13 @@ struct LiveFullscreenOverlay: View {
             gestureLayer
 
             if showControls && !locked {
-                chrome.transition(.opacity)
+                chrome.padding(safeAreaInsets).transition(.opacity)
             }
 
             if showControls {
                 lockButton
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.trailing, 8)
+                    .padding(.trailing, 8 + safeAreaInsets.trailing)
                     .transition(.opacity)
             }
 
@@ -47,7 +48,7 @@ struct LiveFullscreenOverlay: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.92)))
             }
 
-            FullscreenPanelLayer(panel: $panel, controller: player, model: nil, close: { closePanel(then: $0) }, changed: scheduleHide)
+            FullscreenPanelLayer(panel: $panel, controller: player, model: nil, contentSafeAreaInsets: safeAreaInsets, close: { closePanel(then: $0) }, changed: scheduleHide)
         }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)

@@ -15,6 +15,8 @@ struct PlayerDrawer: View {
     var maxHeight: CGFloat = .infinity
     /// 底部面板铺到屏幕最底下，内容自己让开 Home 条
     var bottomInset: CGFloat = 0
+    /// 全屏直播容器覆盖整个屏幕；只让内容避开安全区，材质仍贴边。
+    var contentSafeAreaInsets = EdgeInsets()
     /// 收起抽屉，收起动画结束后执行传入的动作（换画质、改倍速）
     var onClose: (@escaping @MainActor () -> Void) -> Void
 
@@ -78,7 +80,10 @@ struct PlayerDrawer: View {
             }
         }
         .scrollIndicators(.hidden)
-        .frame(width: width)
+        .padding(.top, contentSafeAreaInsets.top)
+        .padding(.bottom, contentSafeAreaInsets.bottom)
+        .padding(.trailing, contentSafeAreaInsets.trailing)
+        .frame(width: width + contentSafeAreaInsets.trailing)
         .background {
             // 大面积用 Material，比 glassEffect 便宜；颜色压暗到设计稿的 rgba(14,14,18,.72)
             Rectangle()

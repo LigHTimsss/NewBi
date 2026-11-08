@@ -83,19 +83,22 @@ struct LiveRoomView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            VStack(spacing: 0) {
-                stage
-                    .frame(height: fullscreen ? geo.size.height : geo.size.width * 9 / 16)
+        GeometryReader { safeGeometry in
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    stage(safeAreaInsets: fullscreen ? safeGeometry.safeAreaInsets : EdgeInsets())
+                        .frame(height: fullscreen ? geo.size.height : geo.size.width * 9 / 16)
 
-                // 全屏时不移除，只收起：退出全屏后滚动位置还在
-                LiveRoomDetails(model: model) { toast = $0 }
-                    .frame(height: fullscreen ? 0 : nil)
-                    .clipped()
-                    .opacity(fullscreen ? 0 : 1)
-                    .allowsHitTesting(!fullscreen)
-                    .accessibilityHidden(fullscreen)
+                    // 全屏时不移除，只收起：退出全屏后滚动位置还在
+                    LiveRoomDetails(model: model) { toast = $0 }
+                        .frame(height: fullscreen ? 0 : nil)
+                        .clipped()
+                        .opacity(fullscreen ? 0 : 1)
+                        .allowsHitTesting(!fullscreen)
+                        .accessibilityHidden(fullscreen)
+                }
             }
+            .ignoresSafeArea(.container, edges: fullscreen ? .all : [])
         }
         .background(fullscreen ? Color.black : Theme.background)
         .toolbar(.hidden, for: .navigationBar)
@@ -131,7 +134,7 @@ struct LiveRoomView: View {
 
     // MARK: 画面
 
-    private var stage: some View {
+    private func stage(safeAreaInsets: EdgeInsets) -> some View {
         ZStack {
             if model.isLive {
                 PlayerSurface(controller: model.player, showsDanmaku: false)
@@ -158,6 +161,7 @@ struct LiveRoomView: View {
                 LiveFullscreenOverlay(
                     model: model,
                     locked: $locked,
+                    safeAreaInsets: safeAreaInsets,
                     onExit: { setFullscreen(false) },
                     onAnchor: { mid in
                         // 先退出全屏、等转回竖屏，再进空间

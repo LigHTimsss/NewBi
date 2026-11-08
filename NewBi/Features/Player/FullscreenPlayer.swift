@@ -587,6 +587,7 @@ struct FullscreenPanelLayer: View {
     @Binding var panel: PlayerPanel?
     let controller: PlayerController
     let model: VideoDetailModel?
+    var contentSafeAreaInsets: EdgeInsets? = nil
     let close: ((@MainActor () -> Void)?) -> Void
     let changed: () -> Void
 
@@ -618,7 +619,7 @@ struct FullscreenPanelLayer: View {
                         if panel == .comments {
                             if let model { CommentsPanel(model: model.comments) { close(nil) } }
                         } else {
-                            PlayerDrawer(panel: panel, controller: controller, model: model) { close($0) }
+                            PlayerDrawer(panel: panel, controller: controller, model: model, contentSafeAreaInsets: contentSafeAreaInsets ?? EdgeInsets()) { close($0) }
                         }
                     }
                     // 评论浮窗宽度可伸缩：先占满它要的宽度，剩下的才给左边的空白
@@ -634,7 +635,7 @@ struct FullscreenPanelLayer: View {
                 if let panel, rises(panel) {
                     PlayerDrawer(
                         panel: panel, controller: controller, model: model,
-                        sheet: true, maxHeight: size.height * 0.58, bottomInset: bottomInset
+                        sheet: true, maxHeight: size.height * 0.58, bottomInset: contentSafeAreaInsets?.bottom ?? bottomInset
                     ) { close($0) }
                     .transition(.move(edge: .bottom))
                 }
