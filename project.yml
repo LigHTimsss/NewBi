@@ -1,7 +1,7 @@
 # XcodeGen 配置：在 Mac 上执行 `xcodegen generate` 生成 NewBi.xcodeproj
 name: NewBi
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: com.lightimsss
   deploymentTarget:
     iOS: "26.0"
   createIntermediateGroups: true
@@ -48,7 +48,7 @@ targets:
         product: KSPlayer
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.newbi
+        PRODUCT_BUNDLE_IDENTIFIER: com.lightimsss.newbi
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: ""
         CODE_SIGN_STYLE: Automatic
@@ -56,7 +56,7 @@ targets:
       path: NewBi/Info.plist
       properties:
         CFBundleURLTypes:
-          - CFBundleURLName: com.example.newbi.links
+          - CFBundleURLName: com.lightimsss.newbi.links
             CFBundleTypeRole: Viewer
             CFBundleURLSchemes: [newbi, bilibili]
         CFBundleDisplayName: NewBi
