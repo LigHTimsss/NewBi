@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage("appearance") private var appearance = 0
     @AppStorage("customAccentRGB") private var customAccentRGB = 0xFB7299
     @AppStorage("accentIndex") private var accentIndex = 0
+    @AppStorage("clipboardVideoAutoOpen") private var clipboardVideoAutoOpen = false
     @AppStorage("homeAutoRefresh") private var homeAutoRefresh = true
     @AppStorage("autoplay") private var autoplay = true
     @AppStorage("cellularAlert") private var cellularAlert = false
@@ -111,6 +112,8 @@ struct SettingsView: View {
                     Toggle("返回时小窗继续播放", isOn: $miniPlayer).frame(minHeight: 50)
                     divider
                     Toggle("首页自动刷新", isOn: $homeAutoRefresh).frame(minHeight: 50)
+                    divider
+                    Toggle("自动读取剪贴板跳转视频", isOn: $clipboardVideoAutoOpen).frame(minHeight: 50)
                     divider
                     Toggle("多 P 自动连播", isOn: $autoNextPart).frame(minHeight: 50)
                     divider

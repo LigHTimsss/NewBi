@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import CryptoKit
 
 enum Route: Hashable {
     case settings
@@ -34,6 +35,10 @@ enum Route: Hashable {
 struct RootView: View {
     @State private var path = NavigationPath()
     @State private var tab: AppTab = .home
+    @AppStorage("clipboardVideoAutoOpen") private var clipboardVideoAutoOpen = false
+    @AppStorage("clipboardVideoLastDigest") private var clipboardVideoLastDigest = ""
+    @State private var clipboardTask: Task<Void, Never>?
+    @State private var clipboardChangeCount: Int?
     @State private var externalLink: ExternalLinkRequest?
     @Environment(SessionStore.self) private var session
     @Environment(\.scenePhase) private var scenePhase
@@ -115,7 +120,24 @@ struct RootView: View {
                 return .systemAction
             }
         })
-        .onOpenURL { url in externalLink = ExternalLinkRequest(url: url) }
+        .onOpenURL { url in
+            clipboardTask?.cancel()
+            clipboardChangeCount = UIPasteboard.general.changeCount
+            externalLink = ExternalLinkRequest(url: url)
+        }
+        .task { checkClipboardVideo() }
+        .onChange(of: clipboardVideoAutoOpen) { _, enabled in
+            clipboardTask?.cancel()
+            if enabled {
+                clipboardChangeCount = nil
+                checkClipboardVideo()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { clipboardTask?.cancel() }
+            if phase == .active { checkClipboardVideo() }
+        }
+        .onDisappear { clipboardTask?.cancel() }
         .task(id: externalLink?.id) {
             guard let request = externalLink else { return }
             await openExternal(request.url)
@@ -146,8 +168,37 @@ struct RootView: View {
     }
 
 
+    /// 只在启动、回到前台或开启开关时检查；不监听每次剪贴板变化。
     @MainActor
-    private func openExternal(_ url: URL) async {
+    private func checkClipboardVideo() {
+        guard clipboardVideoAutoOpen, scenePhase == .active else { return }
+        let pasteboard = UIPasteboard.general
+        guard clipboardChangeCount != pasteboard.changeCount else { return }
+        // 先记次数，避免系统粘贴授权使场景重新激活时重复读取。
+        clipboardChangeCount = pasteboard.changeCount
+        guard pasteboard.hasStrings || pasteboard.hasURLs else { return }
+        guard let text = pasteboard.string ?? pasteboard.url?.absoluteString,
+              let candidate = ClipboardVideoLink.candidate(in: text) else { return }
+        let digest = SHA256.hash(data: Data(candidate.absoluteString.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        guard digest != clipboardVideoLastDigest else { return }
+        clipboardTask?.cancel()
+        clipboardTask = Task { @MainActor in
+            do {
+                guard let url = try await ClipboardVideoLink.resolve(candidate) else { return }
+                guard !Task.isCancelled, clipboardVideoAutoOpen,
+                      scenePhase == .active else { return }
+                // 持久化摘要而非剪贴板原文，重启后同一条链接也不反复打开。
+                await openExternal(url) { clipboardVideoLastDigest = digest }
+            } catch {
+                guard !Task.isCancelled else { return }
+                ToastCenter.shared.show("剪贴板视频链接解析失败，请重新复制后重试")
+            }
+        }
+    }
+
+    @MainActor
+    private func openExternal(_ url: URL, onVideoOpened: () -> Void = {}) async {
         guard !Task.isCancelled else { return }
         guard let target = ExternalAppLink.parse(url) else {
             ToastCenter.shared.show("NewBi 暂不支持此链接")
@@ -194,6 +245,7 @@ struct RootView: View {
                     title: detail.title, pic: detail.pic, duration: detail.duration,
                     owner: detail.owner, stat: detail.stat)
                 VideoStage.shared.open(card, from: nil, pinsPart: cid != nil)
+                onVideoOpened()
             } catch {
                 guard !Task.isCancelled else { return }
                 ToastCenter.shared.show("打开视频失败：\(error.localizedDescription)")
