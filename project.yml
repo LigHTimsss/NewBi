@@ -1,0 +1,76 @@
+# XcodeGen 配置：在 Mac 上执行 `xcodegen generate` 生成 NewBi.xcodeproj
+name: NewBi
+options:
+  bundleIdPrefix: com.lightimsss
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  # 开发语言用简体中文：没有其它本地化时，日期、系统按钮（取消、分享面板等）都按中文显示
+  developmentLanguage: zh-Hans
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # 体积 / 性能：去除未用代码，Release 全模块优化
+    DEAD_CODE_STRIPPING: YES
+    # KSPlayer 依赖的 FFmpeg 二进制包（Libavcodec 等）在 Xcode 26 默认的显式模块扫描下找不到，关掉
+    SWIFT_ENABLE_EXPLICIT_MODULES: NO
+    _EXPERIMENTAL_SWIFT_EXPLICIT_MODULES: NO
+    # FFmpeg 二进制包没有 x86_64 模拟器切片；目标设备和 Apple 芯片的模拟器都是 arm64
+    "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+    STRIP_INSTALLED_PRODUCT: YES
+  configs:
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+packages:
+  # FFmpeg 兜底引擎（约 +20MB）。开源版为 GPL-3.0，个人自用可以，分发前请看其 LICENSE。
+  # 删掉这个包和下面的 dependencies 也能编译，只是没有 FFmpeg 兜底（代码用 canImport 隔离）
+  # 固定 2.3.4：最后一个开源（源码）版本。5.x 起改为闭源二进制，且不带 iOS 真机切片，装不到 iPhone 上
+  KSPlayer:
+    url: https://github.com/kingslay/KSPlayer
+    exactVersion: 2.3.4
+# 共享 scheme：命令行 / CI 的 xcodebuild -scheme 需要
+schemes:
+  NewBi:
+    build:
+      targets:
+        NewBi: all
+targets:
+  NewBi:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: KSPlayer
+        product: KSPlayer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lightimsss.newbi
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.lightimsss.newbi.links
+            CFBundleTypeRole: Viewer
+            CFBundleURLSchemes: [newbi, bilibili]
+        CFBundleDisplayName: NewBi
+        CFBundleDevelopmentRegion: zh-Hans
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        # ProMotion：不加这个键，iPhone 上 Core Animation / SwiftUI 动画最高只跑 60 Hz
+        CADisableMinimumFrameDurationOnPhone: true
+        # DASH 转 HLS 的本地代理跑在 127.0.0.1，需要放行本地明文 HTTP
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # 大图查看「保存到手机」：只申请添加照片
+        NSPhotoLibraryAddUsageDescription: 用于把图片保存到相册
